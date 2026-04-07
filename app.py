@@ -14,13 +14,17 @@ if 'employee_db' not in st.session_state:
 if 'attendance_db' not in st.session_state:
     st.session_state['attendance_db'] = pd.DataFrame(columns=['记录日期', '员工姓名', '工作类型', '时长(小时)', '当日薪资($)'])
 else:
-    # 修复 KeyError：如果系统缓存了旧版本的'打卡日期'，自动重命名为新版的'记录日期'
     if '打卡日期' in st.session_state['attendance_db'].columns:
         st.session_state['attendance_db'].rename(columns={'打卡日期': '记录日期'}, inplace=True)
 
+# 新增：账目流水数据库
+if 'ledger_db' not in st.session_state:
+    st.session_state['ledger_db'] = pd.DataFrame(columns=['交易时间', '关联剧本', '支付方式', '收入金额($)', '备注'])
+
 st.title("Y Square Studio 门店管理系统")
 
-tab1, tab2 = st.tabs(["📚 剧本列表管理", "⏰ 员工考勤与薪资"])
+# 增加到三个 Tab
+tab1, tab2, tab3 = st.tabs(["📚 剧本列表管理", "⏰ 员工考勤与薪资", "💰 账目流水记录"])
 
 # --- Tab 1: 剧本管理 ---
 with tab1:
@@ -40,23 +44,17 @@ with tab1:
                     st.success("剧本信息已录入！")
     with col2:
         st.subheader("当前剧本库")
-        
-        # 新增：剧本/DM 搜索栏
-        search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "")
+        search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "", key="search_s")
         display_scripts = st.session_state['scripts_db'].copy()
-        
         if search_script:
-            # 实现模糊搜索过滤
             mask = display_scripts['剧本名称'].str.contains(search_script, case=False, na=False) | \
                    display_scripts['主开DM'].str.contains(search_script, case=False, na=False)
             display_scripts = display_scripts[mask]
-            
         st.dataframe(display_scripts, use_container_width=True)
 
 # --- Tab 2: 考勤与月度结算 ---
 with tab2:
     col_left, col_right = st.columns([1, 2])
-    
     with col_left:
         st.subheader("1. 员工名册管理")
         with st.form("add_employee_form"):
@@ -69,77 +67,99 @@ with tab2:
                     st.success(f"员工 {emp_name} 已录入系统")
 
         st.divider()
-        
         st.subheader("2. 快速录入考勤")
         employee_list = st.session_state['employee_db']['员工姓名'].tolist()
-        
         if employee_list:
-            work_date = st.date_input("日期", value=datetime.now())
+            work_date = st.date_input("日期", value=datetime.now(), key="work_d")
             work_type = st.radio("工作内容", ["日常带本 (个人)", "NPC演绎 (支持多人)"], horizontal=True)
-            
             if work_type == "日常带本 (个人)":
                 selected_emp = st.selectbox("选择 DM", employee_list)
                 hours = st.number_input("带本时长 (小时)", min_value=0.0, step=0.5)
                 if st.button("提交带本记录"):
                     rate = st.session_state['employee_db'][st.session_state['employee_db']['员工姓名'] == selected_emp]['时薪($)'].values[0]
                     salary = hours * rate
-                    new_record = pd.DataFrame({
-                        '记录日期': [pd.to_datetime(work_date)], '员工姓名': [selected_emp], 
-                        '工作类型': ["带本"], '时长(小时)': [hours], '当日薪资($)': [salary]
-                    })
+                    new_record = pd.DataFrame({'记录日期': [pd.to_datetime(work_date)], '员工姓名': [selected_emp], '工作类型': ["带本"], '时长(小时)': [hours], '当日薪资($)': [salary]})
                     st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], new_record], ignore_index=True)
                     st.success(f"{selected_emp} 记录成功")
-            
             else:
                 selected_emps = st.multiselect("选择参与演绎的所有 DM", employee_list)
                 act_fee = st.number_input("每人演绎费 ($)", min_value=0.0, step=5.0)
                 if st.button("批量提交演绎记录"):
                     if selected_emps:
-                        batch_data = []
-                        for emp in selected_emps:
-                            batch_data.append({
-                                '记录日期': [pd.to_datetime(work_date)], '员工姓名': [emp], 
-                                '工作类型': ["演绎NPC"], '时长(小时)': [0.0], '当日薪资($)': [act_fee]
-                            })
-                        for data in batch_data:
-                            st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(data)], ignore_index=True)
+                        batch_data = [{'记录日期': pd.to_datetime(work_date), '员工姓名': emp, '工作类型': "演绎NPC", '时长(小时)': 0.0, '当日薪资($)': act_fee} for emp in selected_emps]
+                        st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(batch_data)], ignore_index=True)
                         st.success(f"已成功记录 {len(selected_emps)} 位 DM 的演绎工资")
-        else:
-            st.warning("请先录入员工信息")
-
     with col_right:
         st.subheader("💰 财务月结看板")
-        
-        # 新增：员工薪资搜索栏
-        search_emp = st.text_input("🔍 搜索员工姓名单独查账", "")
-        
+        search_emp = st.text_input("🔍 搜索员工姓名单独查账", "", key="search_e")
         if not st.session_state['attendance_db'].empty:
             df = st.session_state['attendance_db'].copy()
             df['记录日期'] = pd.to_datetime(df['记录日期'])
-            
             all_months = df['记录日期'].dt.strftime('%Y-%m').unique().tolist()
             target_month = st.selectbox("选择统计月份", sorted(all_months, reverse=True))
-            
-            # 过滤1：按月份
             month_df = df[df['记录日期'].dt.strftime('%Y-%m') == target_month]
-            
-            # 过滤2：按搜索的员工姓名
             if search_emp:
                 month_df = month_df[month_df['员工姓名'].str.contains(search_emp, case=False, na=False)]
-            
             st.write(f"📅 {target_month} 费用明细")
             st.dataframe(month_df, use_container_width=True)
-            
-            st.write(f"📊 {target_month} 薪资汇总")
             if not month_df.empty:
-                summary = month_df.groupby('员工姓名').agg(
-                    总工时=('时长(小时)', 'sum'),
-                    本月总计薪资=('当日薪资($)', 'sum')
-                ).reset_index()
+                summary = month_df.groupby('员工姓名').agg(总工时=('时长(小时)', 'sum'), 本月总计薪资=('当日薪资($)', 'sum')).reset_index()
                 st.dataframe(summary, use_container_width=True)
-                
                 st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
+
+# --- Tab 3: 账目流水记录 (New!) ---
+with tab3:
+    st.header("💵 门店收银记账")
+    col_pay1, col_pay2 = st.columns([1, 2])
+    
+    with col_pay1:
+        st.subheader("录入新账单")
+        with st.form("cashier_form"):
+            # 关联 Tab 1 的剧本列表
+            script_options = st.session_state['scripts_db']['剧本名称'].unique().tolist()
+            if not script_options:
+                st.warning("请先在 Tab 1 添加剧本记录")
+                script_link = st.text_input("手动输入剧本名(如未关联)")
             else:
-                st.info("未找到匹配的数据。")
+                script_link = st.selectbox("关联剧本场次", script_options)
+            
+            pay_method = st.selectbox("支付方式", ["刷卡", "Venmo/Zelle", "现金", "支付宝"])
+            amount_collected = st.number_input("实收金额 ($)", min_value=0.0, step=1.0)
+            pay_note = st.text_input("备注 (如：张三等6人)")
+            
+            if st.form_submit_button("确认收账"):
+                new_ledger = pd.DataFrame({
+                    '交易时间': [datetime.now().strftime("%Y-%m-%d %H:%M")],
+                    '关联剧本': [script_link],
+                    '支付方式': [pay_method],
+                    '收入金额($)': [amount_collected],
+                    '备注': [pay_note]
+                })
+                st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], new_ledger], ignore_index=True)
+                st.success("账单已记录！")
+
+    with col_pay2:
+        st.subheader("流水记录与统计")
+        if not st.session_state['ledger_db'].empty:
+            # 搜索与过滤
+            search_ledger = st.text_input("🔍 搜索剧本或备注", "", key="search_l")
+            display_ledger = st.session_state['ledger_db'].copy()
+            if search_ledger:
+                display_ledger = display_ledger[
+                    display_ledger['关联剧本'].str.contains(search_ledger, case=False, na=False) | 
+                    display_ledger['备注'].str.contains(search_ledger, case=False, na=False)
+                ]
+            
+            st.dataframe(display_ledger, use_container_width=True)
+            
+            st.divider()
+            # 自动计算汇总
+            st.write("📈 **营收分类汇总**")
+            method_summary = display_ledger.groupby('支付方式')['收入金额($)'].sum().reset_index()
+            total_revenue = method_summary['收入金额($)'].sum()
+            
+            c1, c2 = st.columns(2)
+            c1.dataframe(method_summary, use_container_width=True)
+            c2.metric("总营业额", f"${total_revenue:,.2f}")
         else:
-            st.info("暂无考勤数据。")
+            st.info("暂无交易流水。")

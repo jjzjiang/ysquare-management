@@ -17,31 +17,30 @@ else:
     if '打卡日期' in st.session_state['attendance_db'].columns:
         st.session_state['attendance_db'].rename(columns={'打卡日期': '记录日期'}, inplace=True)
 
-# 账目流水数据库 (新增：入账总额 和 其中小费 字段)
 if 'ledger_db' not in st.session_state:
     st.session_state['ledger_db'] = pd.DataFrame(columns=['交易时间', '关联剧本', '支付方式', '入账总额($)', '其中小费($)', '备注'])
-else:
-    # 兼容旧版本数据
-    if '收入金额($)' in st.session_state['ledger_db'].columns:
-        st.session_state['ledger_db'].rename(columns={'收入金额($)': '入账总额($)'}, inplace=True)
-    if '其中小费($)' not in st.session_state['ledger_db'].columns:
-        st.session_state['ledger_db']['其中小费($)'] = 0.0
 
 st.title("Y Square Studio 门店管理系统")
 
-# 导航 Tabs
 tab1, tab2, tab3 = st.tabs(["📚 剧本列表管理", "⏰ 员工考勤与薪资", "💵 收银与流水记录"])
 
-# --- Tab 1: 剧本管理 ---
+# --- Tab 1: 剧本管理 (关联 Tab 2) ---
 with tab1:
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("添加新剧本 / 场次")
         with st.form("add_script_form"):
             script_name = st.text_input("剧本名称")
-            player_count = st.number_input("人数配置", min_value=1, step=1)
-            price = st.number_input("单人价格 ($)", min_value=0.0, step=1.0)
-            dm_name = st.text_input("主开 DM")
+            player_count = st.number_input("人数配置 (例如: 6)", min_value=1, step=1, value=6)
+            price = st.number_input("单人价格 ($)", min_value=0.0, step=1.0, value=30.0)
+            
+            # 核心升级 1：主开 DM 下拉菜单自动关联 Tab 2 的员工名单
+            employee_list = st.session_state['employee_db']['员工姓名'].tolist()
+            if not employee_list:
+                dm_name = st.text_input("主开 DM (⚠️ 请先去 Tab 2 录入员工名单)")
+            else:
+                dm_name = st.selectbox("主开 DM", employee_list)
+                
             script_date = st.date_input("开本日期")
             if st.form_submit_button("添加记录"):
                 if script_name and dm_name:
@@ -113,24 +112,34 @@ with tab2:
                 st.dataframe(summary, use_container_width=True)
                 st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
 
-# --- Tab 3: 收银记账 (重构：支持拆分支付与小费) ---
+# --- Tab 3: 收银记账 (关联应收价格 & 智能小费) ---
 with tab3:
     col_pay1, col_pay2 = st.columns([1, 1.2])
     
     with col_pay1:
         st.subheader("录入新账单")
         
-        # 剧本关联
+        # 核心升级 2：自带搜索功能的下拉菜单 + 自动抓取价格
         script_options = st.session_state['scripts_db']['剧本名称'].unique().tolist()
+        expected_total = 0.0
+        
         if not script_options:
-            st.warning("提示：你可以在 Tab 1 提前录入剧本库以便这里下拉选择。")
+            st.warning("提示：请先在 Tab 1 录入剧本！")
             script_link = st.text_input("手动输入关联剧本名")
         else:
-            script_link = st.selectbox("关联剧本场次", script_options)
+            # selectbox 原生支持键盘打字搜索
+            script_link = st.selectbox("🔍 搜索/选择剧本场次 (点击后直接打字搜索)", script_options)
+            
+            # 从 Tab 1 的数据库中找到对应的剧本，计算应收总价
+            matched_script = st.session_state['scripts_db'][st.session_state['scripts_db']['剧本名称'] == script_link].iloc[-1]
+            price_per_pax = float(matched_script['单人价格($)'])
+            pax = int(matched_script['人数配置'])
+            expected_total = price_per_pax * pax
+            
+            st.info(f"💡 **系统联动**：此车单价 **${price_per_pax:.2f}** × **{pax}** 人 = 标准应收票款 **${expected_total:.2f}**")
         
         st.divider()
-        st.write("💳 **拆分支付输入**")
-        st.caption("提示：请输入各个渠道的【最终实收金额】。未支付的渠道保持 0 即可。")
+        st.write("💳 **拆分支付输入** (请输入实收金额，未付渠道留空为0)")
         
         c1, c2 = st.columns(2)
         venmo_amt = c1.number_input("📱 Venmo/Zelle ($)", min_value=0.0, step=1.0)
@@ -138,26 +147,36 @@ with tab3:
         card_amt = c1.number_input("💳 刷卡 ($)", min_value=0.0, step=1.0)
         alipay_amt = c2.number_input("💙 支付宝 ($)", min_value=0.0, step=1.0)
         
-        # 实时计算总金额
+        # 实时计算实收总额
         total_collected = venmo_amt + cash_amt + card_amt + alipay_amt
         
         st.divider()
-        st.write("✨ **小费与结算**")
-        tip_percent = st.slider("这笔账单包含的小费比例 (%)", min_value=0, max_value=50, step=5, value=0)
+        st.write("✨ **财务对账与小费**")
         
-        # 数学计算倒推小费金额
-        tip_amount = total_collected - (total_collected / (1 + (tip_percent / 100))) if total_collected > 0 else 0.0
-        
-        st.info(f"🧾 **当前对账面板** \n\n 最终入账总流水: **${total_collected:.2f}** \n\n (系统剥离出的小费总额: **${tip_amount:.2f}**)")
-        
-        pay_note = st.text_input("备注 (如：张三等6人车)")
+        # 核心升级 3：智能小费计算 (实收 - 应收)
+        if expected_total > 0 and total_collected > expected_total:
+            tip_amount = total_collected - expected_total
+            st.success(f"🧾 **完美账单**：实收 **${total_collected:.2f}**。系统自动将溢出的 **${tip_amount:.2f}** 记为小费！")
+        elif expected_total > 0 and 0 < total_collected < expected_total:
+            tip_amount = 0.0
+            st.warning(f"⚠️ **提醒**：实收 **${total_collected:.2f}**，低于应收票款，还差 **${(expected_total - total_collected):.2f}**。 (如为打折请忽略)")
+        else:
+            tip_amount = 0.0
+            if total_collected > 0:
+                st.success(f"🧾 实收 **${total_collected:.2f}**，金额与标准票款匹配。")
+                
+        # 允许手动覆写小费 (应对一些打折但又单独给了小费的复杂情况)
+        override_tip = st.checkbox("手动修改小费金额 (如果有特殊情况)")
+        if override_tip:
+            tip_amount = st.number_input("手动输入小费($)", min_value=0.0, value=float(tip_amount))
+            
+        pay_note = st.text_input("备注 (如：张三等6人车，用了9折券)")
         
         if st.button("确认收账入库", type="primary"):
             if total_collected > 0:
-                # 定义单条记录的保存逻辑
                 def save_record(method, amt):
-                    # 将小费按比例分摊到对应的支付方式中
-                    method_tip = amt - (amt / (1 + (tip_percent / 100)))
+                    # 将小费按金额比例分摊到对应的支付方式流水中
+                    method_tip = amt * (tip_amount / total_collected) if total_collected > 0 else 0
                     new_ledger = pd.DataFrame({
                         '交易时间': [datetime.now().strftime("%Y-%m-%d %H:%M")],
                         '关联剧本': [script_link],
@@ -168,13 +187,12 @@ with tab3:
                     })
                     st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], new_ledger], ignore_index=True)
                 
-                # 逐个检查，只记录金额大于0的支付方式
                 if venmo_amt > 0: save_record("Venmo/Zelle", venmo_amt)
                 if cash_amt > 0: save_record("现金", cash_amt)
                 if card_amt > 0: save_record("刷卡", card_amt)
                 if alipay_amt > 0: save_record("支付宝", alipay_amt)
                 
-                st.success(f"✅ 账单记录成功！总计 ${total_collected:.2f} 已拆分入库。")
+                st.success(f"✅ 账单已记录！共计 ${total_collected:.2f} 已按渠道拆分入库。")
             else:
                 st.error("入账总额不能为 0，请检查上方填写的金额。")
 

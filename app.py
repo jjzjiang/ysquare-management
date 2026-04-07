@@ -4,13 +4,19 @@ from datetime import datetime
 
 st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 
-# 初始化内存数据库
+# --- 数据初始化与缓存兼容 ---
 if 'scripts_db' not in st.session_state:
     st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '主开DM', '日期'])
+
 if 'employee_db' not in st.session_state:
     st.session_state['employee_db'] = pd.DataFrame(columns=['员工姓名', '时薪($)'])
+
 if 'attendance_db' not in st.session_state:
     st.session_state['attendance_db'] = pd.DataFrame(columns=['记录日期', '员工姓名', '工作类型', '时长(小时)', '当日薪资($)'])
+else:
+    # 修复 KeyError：如果系统缓存了旧版本的'打卡日期'，自动重命名为新版的'记录日期'
+    if '打卡日期' in st.session_state['attendance_db'].columns:
+        st.session_state['attendance_db'].rename(columns={'打卡日期': '记录日期'}, inplace=True)
 
 st.title("Y Square Studio 门店管理系统")
 
@@ -34,7 +40,18 @@ with tab1:
                     st.success("剧本信息已录入！")
     with col2:
         st.subheader("当前剧本库")
-        st.dataframe(st.session_state['scripts_db'], use_container_width=True)
+        
+        # 新增：剧本/DM 搜索栏
+        search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "")
+        display_scripts = st.session_state['scripts_db'].copy()
+        
+        if search_script:
+            # 实现模糊搜索过滤
+            mask = display_scripts['剧本名称'].str.contains(search_script, case=False, na=False) | \
+                   display_scripts['主开DM'].str.contains(search_script, case=False, na=False)
+            display_scripts = display_scripts[mask]
+            
+        st.dataframe(display_scripts, use_container_width=True)
 
 # --- Tab 2: 考勤与月度结算 ---
 with tab2:
@@ -74,7 +91,6 @@ with tab2:
                     st.success(f"{selected_emp} 记录成功")
             
             else:
-                # 批量添加 NPC 演绎工资
                 selected_emps = st.multiselect("选择参与演绎的所有 DM", employee_list)
                 act_fee = st.number_input("每人演绎费 ($)", min_value=0.0, step=5.0)
                 if st.button("批量提交演绎记录"):
@@ -94,31 +110,36 @@ with tab2:
     with col_right:
         st.subheader("💰 财务月结看板")
         
+        # 新增：员工薪资搜索栏
+        search_emp = st.text_input("🔍 搜索员工姓名单独查账", "")
+        
         if not st.session_state['attendance_db'].empty:
-            # 数据预处理：确保日期格式正确
             df = st.session_state['attendance_db'].copy()
             df['记录日期'] = pd.to_datetime(df['记录日期'])
             
-            # 月份筛选器
             all_months = df['记录日期'].dt.strftime('%Y-%m').unique().tolist()
             target_month = st.selectbox("选择统计月份", sorted(all_months, reverse=True))
             
-            # 过滤数据
+            # 过滤1：按月份
             month_df = df[df['记录日期'].dt.strftime('%Y-%m') == target_month]
             
-            # 显示明细
+            # 过滤2：按搜索的员工姓名
+            if search_emp:
+                month_df = month_df[month_df['员工姓名'].str.contains(search_emp, case=False, na=False)]
+            
             st.write(f"📅 {target_month} 费用明细")
             st.dataframe(month_df, use_container_width=True)
             
-            # 汇总计算
             st.write(f"📊 {target_month} 薪资汇总")
-            summary = month_df.groupby('员工姓名').agg(
-                总工时=('时长(小时)', 'sum'),
-                本月总计薪资=('当日薪资($)', 'sum')
-            ).reset_index()
-            st.dataframe(summary, use_container_width=True)
-            
-            # 导出功能（可选）
-            st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
+            if not month_df.empty:
+                summary = month_df.groupby('员工姓名').agg(
+                    总工时=('时长(小时)', 'sum'),
+                    本月总计薪资=('当日薪资($)', 'sum')
+                ).reset_index()
+                st.dataframe(summary, use_container_width=True)
+                
+                st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
+            else:
+                st.info("未找到匹配的数据。")
         else:
             st.info("暂无考勤数据。")

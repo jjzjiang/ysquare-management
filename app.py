@@ -3,13 +3,13 @@ import pandas as pd
 
 st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 
-# 初始化内存数据库
+# 初始化内存数据库 (增加了“工作类型”列)
 if 'scripts_db' not in st.session_state:
     st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '主开DM', '日期'])
 if 'employee_db' not in st.session_state:
     st.session_state['employee_db'] = pd.DataFrame(columns=['员工姓名', '时薪($)'])
 if 'attendance_db' not in st.session_state:
-    st.session_state['attendance_db'] = pd.DataFrame(columns=['打卡日期', '员工姓名', '工作时长(小时)', '当日薪资($)'])
+    st.session_state['attendance_db'] = pd.DataFrame(columns=['打卡日期', '员工姓名', '工作类型', '时长(小时)', '当日薪资($)'])
 
 st.title("Y Square Studio 门店管理系统")
 
@@ -38,7 +38,9 @@ with tab1:
 
 with tab2:
     col3, col4 = st.columns([1, 2])
+    
     with col3:
+        # 功能区 1：员工登记
         st.subheader("1. 员工登记")
         with st.form("add_employee_form"):
             emp_name = st.text_input("员工/DM 姓名")
@@ -49,25 +51,54 @@ with tab2:
                     st.session_state['employee_db'] = pd.concat([st.session_state['employee_db'], new_emp], ignore_index=True)
                     st.success(f"录入成功！")
         
+        st.divider() # 加一条分割线让视觉更清晰
+        
+        # 功能区 2：考勤打卡 (移除 form 以支持动态组件切换)
         st.subheader("2. 考勤打卡")
         employee_list = st.session_state['employee_db']['员工姓名'].tolist()
+        
         if employee_list:
-            with st.form("add_attendance_form"):
-                selected_emp = st.selectbox("选择员工", employee_list)
-                work_date = st.date_input("工作日期")
+            selected_emp = st.selectbox("选择员工", employee_list)
+            work_date = st.date_input("工作日期")
+            
+            # 核心改动：动态选择工作类型
+            work_type = st.radio("工作类型", ["日常带本 (按时薪)", "NPC演绎 (按次计费)"], horizontal=True)
+            
+            if work_type == "日常带本 (按时薪)":
                 work_hours = st.number_input("工作时长 (小时)", min_value=0.0, step=0.5)
-                if st.form_submit_button("记录考勤"):
+                act_fee = 0.0
+            else:
+                work_hours = 0.0
+                act_fee = st.number_input("单次演绎费 ($)", min_value=0.0, step=5.0)
+                
+            if st.button("记录这笔考勤"):
+                # 计算薪资逻辑
+                if work_type == "日常带本 (按时薪)":
                     rate = st.session_state['employee_db'][st.session_state['employee_db']['员工姓名'] == selected_emp]['时薪($)'].values[0]
                     daily_salary = work_hours * rate
-                    new_attendance = pd.DataFrame({'打卡日期': [work_date], '员工姓名': [selected_emp], '工作时长(小时)': [work_hours], '当日薪资($)': [daily_salary]})
-                    st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], new_attendance], ignore_index=True)
-                    st.success(f"已记录薪资: ${daily_salary:.2f}")
+                else:
+                    daily_salary = act_fee
+                
+                new_attendance = pd.DataFrame({
+                    '打卡日期': [work_date], 
+                    '员工姓名': [selected_emp], 
+                    '工作类型': [work_type],
+                    '时长(小时)': [work_hours], # 如果是演绎，这里记为0，不增加常规工时
+                    '当日薪资($)': [daily_salary]
+                })
+                st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], new_attendance], ignore_index=True)
+                st.success(f"已成功记录【{work_type}】薪资: ${daily_salary:.2f}")
 
     with col4:
         st.subheader("考勤与薪资记录表")
         st.write("📅 每日考勤明细")
         st.dataframe(st.session_state['attendance_db'], use_container_width=True)
+        
         if not st.session_state['attendance_db'].empty:
             st.write("💰 薪资总计")
-            summary_df = st.session_state['attendance_db'].groupby('员工姓名').agg(总工作时长=('工作时长(小时)', 'sum'), 总应付薪资=('当日薪资($)', 'sum')).reset_index()
+            # 汇总计算，分开统计工时和总薪资
+            summary_df = st.session_state['attendance_db'].groupby('员工姓名').agg(
+                总日常工时=('时长(小时)', 'sum'), 
+                总应付薪资=('当日薪资($)', 'sum')
+            ).reset_index()
             st.dataframe(summary_df, use_container_width=True)

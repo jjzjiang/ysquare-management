@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import time
 
 st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 
@@ -47,7 +48,10 @@ with tab1:
                 if script_name and dm_name:
                     new_script = pd.DataFrame({'剧本名称': [script_name], '人数配置': [player_count], '单人价格($)': [price], '主开DM': [dm_name], '日期': [script_date]})
                     st.session_state['scripts_db'] = pd.concat([st.session_state['scripts_db'], new_script], ignore_index=True)
-                    st.success("剧本信息已录入！")
+                    st.toast("剧本信息已录入！", icon="✅")
+                    time.sleep(0.5)
+                    st.rerun()
+
     with col2:
         st.subheader("当前剧本库")
         search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "", key="search_s")
@@ -60,14 +64,14 @@ with tab1:
         
         st.dataframe(display_scripts, use_container_width=True)
         
-        # 显式删除功能
         with st.expander("🗑️ 删除错误剧本记录"):
             if not display_scripts.empty:
                 del_options = display_scripts.apply(lambda row: f"{row['日期']} | {row['剧本名称']} | DM: {row['主开DM']}", axis=1)
                 del_idx = st.selectbox("选择要删除的剧本", display_scripts.index, format_func=lambda x: del_options[x], key="del_script")
                 if st.button("🚨 确认删除此剧本"):
                     st.session_state['scripts_db'] = st.session_state['scripts_db'].drop(del_idx).reset_index(drop=True)
-                    st.success("删除成功！")
+                    st.toast("删除成功！", icon="🗑️")
+                    time.sleep(0.5)
                     st.rerun()
 
 # ==========================================
@@ -84,16 +88,18 @@ with tab2:
                 if emp_name and emp_name not in st.session_state['employee_db']['员工姓名'].values:
                     new_emp = pd.DataFrame({'员工姓名': [emp_name], '时薪($)': [hourly_rate]})
                     st.session_state['employee_db'] = pd.concat([st.session_state['employee_db'], new_emp], ignore_index=True)
-                    st.success(f"员工 {emp_name} 已录入系统")
+                    st.toast(f"员工 {emp_name} 已录入系统", icon="✅")
+                    time.sleep(0.5)
+                    st.rerun()
         
-        # 删除员工功能
         with st.expander("🗑️ 删除离职/输错的员工"):
             if not st.session_state['employee_db'].empty:
                 emp_del_options = st.session_state['employee_db'].apply(lambda row: f"{row['员工姓名']} (时薪: ${row['时薪($)']})", axis=1)
                 emp_del_idx = st.selectbox("选择要删除的员工", st.session_state['employee_db'].index, format_func=lambda x: emp_del_options[x], key="del_emp")
                 if st.button("🚨 确认删除此员工"):
                     st.session_state['employee_db'] = st.session_state['employee_db'].drop(emp_del_idx).reset_index(drop=True)
-                    st.success("员工已删除！")
+                    st.toast("员工已删除！", icon="🗑️")
+                    time.sleep(0.5)
                     st.rerun()
 
         st.divider()
@@ -110,7 +116,9 @@ with tab2:
                     salary = hours * rate
                     new_record = pd.DataFrame({'记录日期': [pd.to_datetime(work_date)], '员工姓名': [selected_emp], '工作类型': ["带本"], '时长(小时)': [hours], '当日薪资($)': [salary]})
                     st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], new_record], ignore_index=True)
-                    st.success(f"{selected_emp} 记录成功")
+                    st.toast(f"{selected_emp} 记录成功", icon="✅")
+                    time.sleep(0.5)
+                    st.rerun()
             else:
                 selected_emps = st.multiselect("选择参与演绎的所有 DM", employee_list)
                 act_fee = st.number_input("每人演绎费 ($)", min_value=0.0, step=5.0)
@@ -118,7 +126,10 @@ with tab2:
                     if selected_emps:
                         batch_data = [{'记录日期': pd.to_datetime(work_date), '员工姓名': emp, '工作类型': "演绎NPC", '时长(小时)': 0.0, '当日薪资($)': act_fee} for emp in selected_emps]
                         st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(batch_data)], ignore_index=True)
-                        st.success(f"已成功记录 {len(selected_emps)} 位 DM 的演绎工资")
+                        st.toast(f"已成功记录 {len(selected_emps)} 位 DM 的演绎工资", icon="✅")
+                        time.sleep(0.5)
+                        st.rerun()
+
     with col_right:
         st.subheader("💰 财务月结看板")
         search_emp = st.text_input("🔍 搜索员工姓名单独查账", "", key="search_e")
@@ -133,26 +144,27 @@ with tab2:
                 month_df = month_df[month_df['员工姓名'].str.contains(search_emp, case=False, na=False)]
             
             st.write(f"📅 {target_month} 费用明细")
-            # 这里保留双击编辑功能，方便改数字
-            edited_month_df = st.data_editor(month_df, use_container_width=True, key="edit_att")
             
-            # 把编辑的结果同步回数据库
+            # 安全更新逻辑：双击修改数字不污染数据库
+            edited_month_df = st.data_editor(month_df, use_container_width=True, key="edit_att")
             if not edited_month_df.equals(month_df):
-                 st.session_state['attendance_db'].update(edited_month_df)
+                 for col in edited_month_df.columns:
+                     st.session_state['attendance_db'].loc[edited_month_df.index, col] = edited_month_df[col]
+                 st.toast("已保存手动修改！", icon="💾")
             
             if not month_df.empty:
                 summary = month_df.groupby('员工姓名').agg(总工时=('时长(小时)', 'sum'), 本月总计薪资=('当日薪资($)', 'sum')).reset_index()
                 st.dataframe(summary, use_container_width=True)
                 st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
             
-            # 显式删除考勤功能
             with st.expander("🗑️ 删除错误的考勤 / 演绎 / 小费记录"):
                 if not month_df.empty:
                     att_del_options = month_df.apply(lambda row: f"{row['记录日期'].strftime('%Y-%m-%d')} | {row['员工姓名']} | {row['工作类型']} | 薪资: ${row['当日薪资($)']}", axis=1)
                     att_del_idx = st.selectbox("选择要删除的记录", month_df.index, format_func=lambda x: att_del_options[x], key="del_att")
                     if st.button("🚨 确认删除此记录"):
                         st.session_state['attendance_db'] = st.session_state['attendance_db'].drop(att_del_idx).reset_index(drop=True)
-                        st.success("记录已删除！")
+                        st.toast("记录已删除！", icon="🗑️")
+                        time.sleep(0.5)
                         st.rerun()
 
 # ==========================================
@@ -200,121 +212,4 @@ with tab3:
         wechat_usd = wechat_rmb / exchange_rate if exchange_rate > 0 else 0.0
         
         if alipay_rmb > 0 or wechat_rmb > 0:
-            st.caption(f"*(折算结果：支付宝约 ${alipay_usd:.2f}，微信约 ${wechat_usd:.2f})*")
-
-        total_collected = venmo_amt + zelle_amt + transfer_amt + cash_amt + alipay_usd + wechat_usd
-        
-        st.divider()
-        st.write("✨ **财务对账与小费分配**")
-        
-        if expected_total > 0 and total_collected > expected_total:
-            tip_amount = total_collected - expected_total
-            st.success(f"🧾 实收 **${total_collected:.2f}**。系统自动将溢出的 **${tip_amount:.2f}** 记为小费！")
-        elif expected_total > 0 and 0 < total_collected < expected_total:
-            tip_amount = 0.0
-            st.warning(f"⚠️ 实收 **${total_collected:.2f}**，低于应收票款，差额 **${(expected_total - total_collected):.2f}**。")
-        else:
-            tip_amount = 0.0
-            if total_collected > 0:
-                st.success(f"🧾 实收 **${total_collected:.2f}**，金额与标准票款匹配。")
-                
-        override_tip = st.checkbox("手动修改小费金额")
-        if override_tip:
-            tip_amount = st.number_input("手动输入小费($)", min_value=0.0, value=float(tip_amount))
-            
-        dm_list = st.session_state['employee_db']['员工姓名'].tolist()
-        tipped_dms = st.multiselect("🧑‍🏫 选择分配小费的 DM (将自动平分并记入薪资账单)", dm_list)
-            
-        pay_note = st.text_input("备注 (如：张三等6人车)")
-        
-        if st.button("确认收账入库", type="primary"):
-            if total_collected > 0:
-                def save_record(method, amt, rmb_original=None):
-                    method_tip = amt * (tip_amount / total_collected) if total_collected > 0 else 0
-                    final_note = pay_note
-                    if rmb_original:
-                        final_note = f"{pay_note} [{method}收 ¥{rmb_original:.2f}]".strip()
-                        
-                    new_ledger = pd.DataFrame({
-                        '交易时间': [datetime.now().strftime("%Y-%m-%d %H:%M")],
-                        '关联剧本': [script_link],
-                        '支付方式': [method],
-                        '入账总额($)': [amt],
-                        '其中小费($)': [method_tip],
-                        '备注': [final_note]
-                    })
-                    st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], new_ledger], ignore_index=True)
-                
-                if venmo_amt > 0: save_record("Venmo", venmo_amt)
-                if zelle_amt > 0: save_record("Zelle", zelle_amt)
-                if transfer_amt > 0: save_record("转账", transfer_amt)
-                if cash_amt > 0: save_record("现金", cash_amt)
-                if alipay_usd > 0: save_record("支付宝", alipay_usd, alipay_rmb)
-                if wechat_usd > 0: save_record("微信", wechat_usd, wechat_rmb)
-                
-                if tip_amount > 0 and tipped_dms:
-                    tip_per_dm = tip_amount / len(tipped_dms)
-                    tip_records = []
-                    for dm in tipped_dms:
-                        tip_records.append({
-                            '记录日期': pd.to_datetime(datetime.now().date()), 
-                            '员工姓名': dm, 
-                            '工作类型': "专属小费", 
-                            '时长(小时)': 0.0, 
-                            '当日薪资($)': tip_per_dm
-                        })
-                    st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(tip_records)], ignore_index=True)
-                    st.success(f"✅ 账单已入库！💸 小费 ${tip_amount:.2f} 已自动平分给 {len(tipped_dms)} 位 DM，写入考勤系统。")
-                else:
-                    st.success(f"✅ 账单已记录！共计 ${total_collected:.2f} 已按渠道入库。")
-            else:
-                st.error("入账总额不能为 0，请检查填写的金额。")
-
-    with col_pay2:
-        st.subheader("流水记录与多维统计")
-        if not st.session_state['ledger_db'].empty:
-            search_ledger = st.text_input("🔍 搜索剧本名称或备注查账", "", key="search_l")
-            
-            display_ledger = st.session_state['ledger_db'].copy()
-            if search_ledger:
-                display_ledger = display_ledger[
-                    display_ledger['关联剧本'].str.contains(search_ledger, case=False, na=False) | 
-                    display_ledger['备注'].str.contains(search_ledger, case=False, na=False)
-                ]
-            
-            # 双击修改保留
-            edited_ledger = st.data_editor(display_ledger, use_container_width=True, key="edit_ledger")
-            if not edited_ledger.equals(display_ledger):
-                 st.session_state['ledger_db'].update(edited_ledger)
-                 
-            # 显式删除流水功能
-            with st.expander("🗑️ 录错流水了？点此永久删除"):
-                if not display_ledger.empty:
-                    ledger_del_options = display_ledger.apply(lambda row: f"{row['交易时间']} | {row['关联剧本']} | {row['支付方式']} | ${row['入账总额($)']}", axis=1)
-                    ledger_del_idx = st.selectbox("选择要删除的流水", display_ledger.index, format_func=lambda x: ledger_del_options[x], key="del_ledger_record")
-                    if st.button("🚨 确认删除此流水"):
-                        st.session_state['ledger_db'] = st.session_state['ledger_db'].drop(ledger_del_idx).reset_index(drop=True)
-                        st.success("流水已删除！")
-                        st.rerun()
-            
-            st.divider()
-            st.write("📈 **财务维度汇总 (全折算为 USD)**")
-            
-            if not display_ledger.empty:
-                method_summary = display_ledger.groupby('支付方式').agg(
-                    渠道总入账=('入账总额($)', 'sum'),
-                    包含小费=('其中小费($)', 'sum')
-                ).reset_index()
-                
-                total_revenue = method_summary['渠道总入账'].sum()
-                total_tips = method_summary['包含小费'].sum()
-                pure_revenue = total_revenue - total_tips
-                
-                m1, m2, m3 = st.columns(3)
-                m1.metric("💰 门店总入账 ($)", f"${total_revenue:,.2f}")
-                m2.metric("📊 剥离小费后净收", f"${pure_revenue:,.2f}")
-                m3.metric("✨ 累计沉淀小费", f"${total_tips:,.2f}")
-                
-                st.dataframe(method_summary, use_container_width=True)
-        else:
-            st.info("暂无交易流水。")
+            st.caption

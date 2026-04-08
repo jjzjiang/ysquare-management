@@ -11,6 +11,9 @@ st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 # ==========================================
 if 'scripts_db' not in st.session_state:
     st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '日期'])
+else:
+    if '主开DM' in st.session_state['scripts_db'].columns:
+        st.session_state['scripts_db'] = st.session_state['scripts_db'].drop(columns=['主开DM'])
 
 if 'inventory_db' not in st.session_state:
     st.session_state['inventory_db'] = pd.DataFrame(columns=['项目名称', '单价($)'])
@@ -31,6 +34,9 @@ if 'ledger_db' not in st.session_state:
     
 if 'member_db' not in st.session_state:
     st.session_state['member_db'] = pd.DataFrame(columns=['会员姓名', '电话号码', '当前余额($)', '折扣率', '累计充值($)', '入会日期'])
+else:
+    if '电话号码' not in st.session_state['member_db'].columns:
+        st.session_state['member_db'].insert(1, '电话号码', "")
 
 st.title("Y Square Studio 门店管理系统")
 tabs = st.tabs(["📚 剧本与零食", "⏰ 员工考勤", "💵 收银台", "📊 财务报表", "💎 会员管理"])
@@ -78,13 +84,13 @@ with tabs[0]:
             
             cols = ['剧本名称', '累计开本(场)', '人数配置', '单人价格($)', '日期']
             display_db = display_db[cols]
-            st.session_state['scripts_db'] = st.data_editor(display_db, num_rows="dynamic", use_container_width=True, key="ed_s").drop(columns=['累计开本(场)'], errors='ignore')
+            st.session_state['scripts_db'] = st.data_editor(display_db, num_rows="dynamic", use_container_width=True, key="ed_s", column_config={"累计开本(场)": st.column_config.NumberColumn(disabled=True)}).drop(columns=['累计开本(场)'], errors='ignore')
 
         with tab_list2:
             st.session_state['inventory_db'] = st.data_editor(st.session_state['inventory_db'], num_rows="dynamic", use_container_width=True, key="ed_i")
 
 # ==========================================
-# Tab 2: 员工考勤与薪资 (保持逻辑)
+# Tab 2: 员工考勤与薪资
 # ==========================================
 with tabs[1]:
     col_l, col_r = st.columns([1, 2])
@@ -121,7 +127,7 @@ with tabs[1]:
         st.session_state['attendance_db'] = st.data_editor(st.session_state['attendance_db'], num_rows="dynamic", use_container_width=True, key="ed_att")
 
 # ==========================================
-# Tab 3: 收银台 (联动零食多选)
+# Tab 3: 收银台
 # ==========================================
 with tabs[2]:
     st.subheader("📈 门店总营业额监控")
@@ -139,6 +145,7 @@ with tabs[2]:
     with c_p1:
         st.subheader("新建收银账单")
         s_opts = st.session_state['scripts_db']['剧本名称'].unique().tolist()
+        emp_list = st.session_state['employee_db']['员工姓名'].tolist()
         
         if not s_opts:
             st.warning("请先在 Tab 1 录入剧本！")
@@ -148,13 +155,12 @@ with tabs[2]:
             single_price = float(s_data['单人价格($)'])
             pax = int(s_data['人数配置'])
             base_price = single_price * pax
-            session_dm = st.selectbox("🧑‍🏫 本场带本 DM", emp_list) if emp_list else ""
+            session_dm = st.selectbox("🧑‍🏫 本场带本 DM (记录流水用)", emp_list) if emp_list else ""
             
-            # --- 核心更新：零食多选区域 ---
             st.divider()
             st.write("🍿 **零食/饮料消费**")
             inventory_list = st.session_state['inventory_db']['项目名称'].tolist()
-            selected_items = st.multiselect("🔍 搜索并选择零食/饮料 (支持多选)", inventory_list)
+            selected_items = st.multiselect("🔍 选择零食/饮料 (支持多选)", inventory_list)
             
             snack_total = 0.0
             snack_details = []
@@ -169,7 +175,7 @@ with tabs[2]:
             st.info(f"💡 **本单计算**：剧本 ${base_price:.2f} + 零食 ${snack_total:.2f} = 总计应收 **${actual_expected_total_base:.2f}**")
 
             st.divider()
-            st.write("💰 **支付明细录入**")
+            st.write("💰 **外部支付明细录入**")
             col_u1, col_u2 = st.columns(2)
             v_usd = col_u1.number_input("📱 Venmo ($)", 0.0)
             z_usd = col_u2.number_input("💸 Zelle ($)", 0.0)
@@ -183,11 +189,13 @@ with tabs[2]:
             
             external_total = v_usd + z_usd + c_usd + tr_usd + (ali_rmb/ex_rate if ex_rate > 0 else 0) + (wx_rmb/ex_rate if ex_rate > 0 else 0)
 
-            st.write("💎 **会员扣款**")
+            st.write("💎 **会员扣款 (多选)**")
             m_list = st.session_state['member_db']['会员姓名'].tolist()
             selected_members = st.multiselect("🔍 本车有哪些会员？", m_list)
+            
             member_deductions = {}
             member_total = 0.0
+            expected_member_revenue = 0.0 
             total_explicit_member_tip = 0.0 
             
             if selected_members:
@@ -196,34 +204,52 @@ with tabs[2]:
                     m_discount = float(m_info['折扣率'])
                     m_bal = float(m_info['当前余额($)'])
                     m_discounted_price = single_price * m_discount
+                    expected_member_revenue += m_discounted_price
+                    
                     st.caption(f"会员 {m} | 折后票价: ${m_discounted_price:.2f} | 余额: ${m_bal:.2f}")
                     
                     col_t1, col_t2 = st.columns(2)
-                    with col_t1: tip_mode = st.radio("添加小费", ["无", "$", "%"], horizontal=True, key=f"tm_{m}")
+                    with col_t1: tip_mode = st.radio("添加小费", ["无", "固定金额 ($)", "百分比 (%)"], horizontal=True, key=f"tm_{m}")
                     with col_t2:
                         m_tip = 0.0
-                        if tip_mode == "$": m_tip = st.number_input("金额", 0.0, key=f"tv_{m}")
-                        elif tip_mode == "%": m_tip = m_discounted_price * (st.slider("比例", 0, 50, 15, 5, key=f"tp_{m}")/100)
+                        if tip_mode == "固定金额 ($)": m_tip = st.number_input("金额", 0.0, key=f"tv_{m}")
+                        elif tip_mode == "百分比 (%)": m_tip = m_discounted_price * (st.slider("比例", 0, 50, 15, 5, key=f"tp_{m}")/100)
                     
                     target_deduct = m_discounted_price + m_tip
+                    total_explicit_member_tip += m_tip
                     st.markdown(f"👉 **该会员消费合计: ${target_deduct:.2f}**")
                     deduct_amt = st.number_input(f"实际从 {m} 扣除", 0.0, m_bal, min(target_deduct, m_bal), key=f"dd_{m}_{target_deduct}")
                     if deduct_amt > 0:
                         member_deductions[m] = deduct_amt
                         member_total += deduct_amt
-                        total_explicit_member_tip += m_tip
 
-            # 最终对账
-            total_collected = external_total + member_total
-            # 动态计算应收（考虑会员折扣和零食）
-            actual_expected_total = (pax - len(selected_members)) * single_price + (len(selected_members) * single_price * 0.9) + snack_total # 简化逻辑：会员按各自折扣，这里仅作UI提示
-            
             st.divider()
-            final_tip_amount = max(0, total_collected - (actual_expected_total_base - (len(selected_members)*single_price*(1-0.8)))) # 这是一个概数，建议以手动覆写为准
+            st.write("✨ **财务对账与结算**")
             
-            st.success(f"🧾 最终实收: **${total_collected:.2f}**")
+            external_pax = max(0, pax - len(selected_members))
+            expected_external_revenue = external_pax * single_price
+            # 最终的应收 = 外部人员剧本原价 + 会员折后价 + 零食钱
+            actual_expected_total = expected_external_revenue + expected_member_revenue + snack_total
+            total_collected = external_total + member_total
+            
+            extra_overflow = total_collected - actual_expected_total - total_explicit_member_tip
+            extra_overflow_tip = max(0, extra_overflow)
+            system_calculated_tip = total_explicit_member_tip + extra_overflow_tip
+            
+            st.caption(f"📊 动态折后应收总款 (含零食) 应为：**${actual_expected_total:.2f}**")
+            
+            if system_calculated_tip > 0:
+                st.success(f"🧾 最终实收: **${total_collected:.2f}**。包含系统总小费: **${system_calculated_tip:.2f}**")
+            else:
+                st.info(f"🧾 最终实收: **${total_collected:.2f}**")
+                
+            if total_collected < actual_expected_total:
+                st.warning(f"⚠️ 实收金额低于本单应收标准！")
+            
             if st.checkbox("手动确认/修改总小费金额"):
-                final_tip_amount = st.number_input("输入总小费 ($)", value=0.0)
+                final_tip_amount = st.number_input("输入总小费 ($)", value=float(system_calculated_tip), min_value=0.0)
+            else:
+                final_tip_amount = system_calculated_tip
             
             t_dms = st.multiselect("🧑‍🏫 分配小费的 DM", emp_list, default=[session_dm] if session_dm else [])
             snack_note = f" [含零食: {', '.join(snack_details)}]" if snack_details else ""
@@ -239,7 +265,7 @@ with tabs[2]:
 
                     def save_ext(method, amt, r=None):
                         method_tip = amt * (final_tip_amount / total_collected) if total_collected > 0 else 0
-                        f_note = f"{note} [{method}收 ¥{r:.2f}]" if r else note
+                        f_note = f"{note} [{method}收 ¥{r:.2f}]".strip() if r else note
                         ext_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[session_dm],'支付方式':[method],'入账总额($)':[amt],'其中小费($)':[method_tip],'备注':[f_note]})
                         st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], ext_log], ignore_index=True)
                         
@@ -254,13 +280,21 @@ with tabs[2]:
                         t_recs = [{'记录日期':pd.to_datetime(datetime.now().date()),'员工姓名':e,'工作类型':'专属小费','时长(小时)':0.0,'当日薪资($)':final_tip_amount/len(t_dms)} for e in t_dms]
                         st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(t_recs)], ignore_index=True)
                     st.rerun()
+                else:
+                    st.error("入账总额不能为 0！")
 
     with c_p2:
-        st.subheader("流水明细")
-        st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=600, key="ed_l")
+        st.subheader("流水明细与修改")
+        search_ledger = st.text_input("🔍 搜索查账 (清空搜索框以进入编辑模式)", "", key="search_l")
+        
+        if search_ledger:
+            mask = st.session_state['ledger_db']['关联剧本'].str.contains(search_ledger, case=False, na=False) | st.session_state['ledger_db']['备注'].str.contains(search_ledger, case=False, na=False) | st.session_state['ledger_db']['主开DM'].str.contains(search_ledger, case=False, na=False)
+            st.dataframe(st.session_state['ledger_db'][mask], use_container_width=True, height=600)
+        else:
+            st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=600, key="ed_l")
 
 # ==========================================
-# Tab 4: 经营报表 (自动涵盖零食收入)
+# Tab 4: 经营报表 (全面恢复明细与百分比)
 # ==========================================
 with tabs[3]:
     st.header("📊 财务损益动态分析")
@@ -273,29 +307,61 @@ with tabs[3]:
         l_df = st.session_state['ledger_db'].copy()
         a_df = st.session_state['attendance_db'].copy()
         
+        rev = 0.0; tips = 0.0; wages = 0.0
+        filtered_l = pd.DataFrame()
+        filtered_a = pd.DataFrame()
+        
         if not l_df.empty:
             l_df['交易时间_dt'] = pd.to_datetime(l_df['交易时间']).dt.date
             mask = (l_df['交易时间_dt'] >= start_date) & (l_df['交易时间_dt'] <= end_date)
             filtered_l = l_df[mask]
             
-            # 总营业额自动包含了剧本收入 + 零食收入 (因为都在入账总额里)
+            # 总营业额自动包含了剧本收入 + 零食收入 + 会员充值，排除会员余额的抵扣
             rev = filtered_l[filtered_l['支付方式'] != '会员余额']['入账总额($)'].sum()
-            tips = 0.0
-            wages = 0.0
-            if not a_df.empty:
-                a_df['记录日期_dt'] = pd.to_datetime(a_df['记录日期']).dt.date
-                mask_a = (a_df['记录日期_dt'] >= start_date) & (a_df['记录日期_dt'] <= end_date)
-                filtered_a = a_df[mask_a]
-                tips = filtered_a[filtered_a['工作类型'] == '专属小费']['当日薪资($)'].sum()
-                wages = filtered_a[filtered_a['工作类型'] != '专属小费']['当日薪资($)'].sum()
+            
+        if not a_df.empty and '记录日期' in a_df.columns:
+            a_df['记录日期_dt'] = pd.to_datetime(a_df['记录日期']).dt.date
+            mask_a = (a_df['记录日期_dt'] >= start_date) & (a_df['记录日期_dt'] <= end_date)
+            filtered_a = a_df[mask_a]
+            tips = filtered_a[filtered_a['工作类型'] == '专属小费']['当日薪资($)'].sum()
+            wages = filtered_a[filtered_a['工作类型'] != '专属小费']['当日薪资($)'].sum()
 
-            profit = rev - wages - tips - rent
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("区间总营业额", f"${rev:,.2f}")
-            m2.metric("时薪支出", f"${wages:,.2f}")
-            m3.metric("小费支出", f"${tips:,.2f}")
-            m4.metric("房租成本", f"${rent:,.2f}")
-            m5.metric("净利润", f"${profit:,.2f}")
+        profit = rev - wages - tips - rent
+        
+        # 计算各种费用占总营业额的百分比
+        if rev > 0:
+            wages_pct = (wages / rev) * 100
+            tips_pct = (tips / rev) * 100
+            rent_pct = (rent / rev) * 100
+            profit_pct = (profit / rev) * 100
+        else:
+            wages_pct = tips_pct = rent_pct = profit_pct = 0.0
+
+        st.info("💡 财务引擎已启动【防重复计算】：会员充值款将直接计入现金流，后续会员打本扣除余额的交易将被视为内部抵扣，不重复计算现金营收，确保报表与实际账户入账 100% 匹配。")
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("区间总营业额", f"${rev:,.2f}", "100% (计算基准)", delta_color="off")
+        m2.metric("时薪支出", f"${wages:,.2f}", f"占营业额: {wages_pct:.1f}%", delta_color="inverse")
+        m3.metric("小费支出", f"${tips:,.2f}", f"占营业额: {tips_pct:.1f}%", delta_color="inverse")
+        m4.metric("房租成本", f"${rent:,.2f}", f"占营业额: {rent_pct:.1f}%", delta_color="inverse")
+        m5.metric("净利润", f"${profit:,.2f}", f"净利润率: {profit_pct:.1f}%")
+        
+        # 恢复下方的明细表格
+        st.divider()
+        st.write("📝 **期间明细参考**")
+        c_sub1, c_sub2 = st.columns(2)
+        with c_sub1:
+            st.caption("🧾 流水入账记录")
+            if not filtered_l.empty:
+                st.dataframe(filtered_l[['交易时间', '关联剧本', '主开DM', '支付方式', '入账总额($)']], use_container_width=True)
+            else:
+                st.info("期间无入账记录。")
+        with c_sub2:
+            st.caption("🧑‍🏫 员工薪资产生")
+            if not filtered_a.empty:
+                st.dataframe(filtered_a[['记录日期', '员工姓名', '工作类型', '当日薪资($)']], use_container_width=True)
+            else:
+                st.info("期间无人工支出记录。")
 
 # ==========================================
 # Tab 5: 会员管理 (智能模糊搜索)

@@ -4,10 +4,10 @@ from datetime import datetime
 import time
 import re
 
-st.set_page_config(page_title="Y Square Studio 管理系统 (V5.0 稳定版)", layout="wide")
+st.set_page_config(page_title="Y Square Studio 管理系统 (V5.01)", layout="wide")
 
 # ==========================================
-# 0. 核心数据初始化 (V5.0 稳定版)
+# 0. 核心数据初始化 (V5.01 稳定版)
 # ==========================================
 if 'scripts_db' not in st.session_state:
     st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '日期'])
@@ -38,11 +38,11 @@ else:
     if '电话号码' not in st.session_state['member_db'].columns:
         st.session_state['member_db'].insert(1, '电话号码', "")
 
-st.title("Y Square Studio 门店管理系统 [V5.0]")
+st.title("Y Square Studio 门店管理系统 [V5.01]")
 tabs = st.tabs(["📚 剧本与零食", "⏰ 员工考勤", "💵 收银台", "📊 财务报表", "💎 会员管理"])
 
 # ==========================================
-# Tab 1: 剧本与零食列表管理 (搜索功能全面恢复)
+# Tab 1: 剧本与零食列表管理
 # ==========================================
 with tabs[0]:
     col1, col2 = st.columns([1, 2.5])
@@ -102,7 +102,7 @@ with tabs[0]:
             st.session_state['inventory_db'] = st.data_editor(st.session_state['inventory_db'], num_rows="dynamic", use_container_width=True, key="ed_i")
 
 # ==========================================
-# Tab 2: 员工考勤与薪资 (月度看板与搜索功能满血复活)
+# Tab 2: 员工考勤与薪资
 # ==========================================
 with tabs[1]:
     col_l, col_r = st.columns([1, 2.5])
@@ -185,18 +185,22 @@ with tabs[1]:
                         st.rerun()
 
 # ==========================================
-# Tab 3: 收银台 (V5.0 彻底修复多选清空Bug)
+# Tab 3: 收银台 (V5.01 修复显示视觉误差，明确隔离会员扣款)
 # ==========================================
 with tabs[2]:
     st.subheader("📈 门店总营业额监控")
     display_ledger = st.session_state['ledger_db']
     if not display_ledger.empty:
+        # V5.01: 营业额严格排除了 '会员余额'
         actual_cash_in = display_ledger[display_ledger['支付方式'] != '会员余额']['入账总额($)'].sum()
+        member_consumed = display_ledger[display_ledger['支付方式'] == '会员余额']['入账总额($)'].sum()
         total_tips = display_ledger['其中小费($)'].sum()
-        m1, m2, m3 = st.columns(3)
-        m1.metric("💰 门店实际现金流入", f"${actual_cash_in:,.2f}")
-        m2.metric("📊 剥离小费后净现金", f"${actual_cash_in - total_tips:,.2f}")
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("💰 门店总营业额", f"${actual_cash_in:,.2f}", "真实进账 (不含余额抵扣)")
+        m2.metric("💎 会员余额消耗", f"${member_consumed:,.2f}", "内部账单 (不计入营业额)", delta_color="off")
         m3.metric("✨ 待发小费池", f"${total_tips:,.2f}")
+        m4.metric("📊 剥离小费后净现金", f"${actual_cash_in - total_tips:,.2f}")
 
     st.divider()
     c_p1, c_p2 = st.columns([1.2, 1.4])
@@ -248,8 +252,7 @@ with tabs[2]:
             st.divider()
             st.write("💎 **选择会员消费 (独立计费与专属零食)**")
             m_list = st.session_state['member_db']['会员姓名'].unique().tolist()
-            
-            selected_members = st.multiselect("🔍 本车有哪些会员？(支持无缝多选)", m_list, key="member_selector")
+            selected_members = st.multiselect("🔍 本车有哪些会员？(支持多选)", m_list, key="member_selector")
             
             member_deductions = {}
             member_snack_notes = {}
@@ -291,9 +294,7 @@ with tabs[2]:
                     total_explicit_member_tip += m_tip
                     target_deduct = m_discounted_price + m_snack_total + m_tip
                     
-                    st.markdown(f"👉 **该会员本次消费合计 (剧本+零食+小费): ${target_deduct:.2f}**")
-                    
-                    # V5.0 绝对稳定的 key：无论数值怎么变，框绝对不会清空重置！
+                    st.markdown(f"👉 **该会员本次消费合计: ${target_deduct:.2f}**")
                     deduct_amt = st.number_input(f"💳 实际从 {m} 余额扣除", min_value=0.0, max_value=max(m_bal, 0.0), value=float(min(target_deduct, m_bal)), step=1.0, key=f"deduct_stable_{m}")
                     
                     if deduct_amt > 0:
@@ -304,26 +305,34 @@ with tabs[2]:
                         st.write("---")
 
             st.divider()
-            st.write("✨ **财务对账与结算**")
+            # V5.01: 核心优化！拆分显示账单，彻底解决“重复计算”视觉误导
+            st.markdown("### 🧾 账单结算汇总")
             
             external_pax = max(0, pax - len(selected_members))
             expected_external_revenue = (external_pax * single_price) + global_snack_total
             actual_expected_total = expected_external_revenue + expected_member_revenue
+            
             total_collected = external_total + member_total
             
             extra_overflow = total_collected - actual_expected_total - total_explicit_member_tip
             extra_overflow_tip = max(0, extra_overflow)
             system_calculated_tip = total_explicit_member_tip + extra_overflow_tip
             
-            st.caption(f"📊 动态折后应收总款 (含所有零食) 应为：**${actual_expected_total:.2f}**")
+            # 采用直观的面板分别显示“进账”和“抵扣”
+            col_sum1, col_sum2, col_sum3 = st.columns(3)
+            col_sum1.metric("📌 本单总流水 (含抵扣)", f"${total_collected:.2f}")
+            col_sum2.metric("💰 实际新增营业额 (外部支付)", f"${external_total:.2f}")
+            col_sum3.metric("💎 会员余额内部抵扣", f"${member_total:.2f}")
+            
+            st.caption(f"*(本车满编系统折后标准应收款为: **${actual_expected_total:.2f}**)*")
             
             if system_calculated_tip > 0:
-                st.success(f"🧾 最终实收: **${total_collected:.2f}**。包含系统计算总小费: **${system_calculated_tip:.2f}**")
+                st.success(f"🎉 账单金额充裕！本单共产生总小费: **${system_calculated_tip:.2f}** (包含会员自选小费与外部溢出款)")
             else:
-                st.info(f"🧾 最终实收: **${total_collected:.2f}**")
+                st.info("✅ 账单已配平。")
                 
             if total_collected < actual_expected_total:
-                st.warning(f"⚠️ 实收金额低于本单应收标准！")
+                st.warning(f"⚠️ 本单各项支付与抵扣金额加总，低于本单应收标准！请确认是否存在漏付款。")
             
             if st.checkbox("手动确认/修改总小费金额"):
                 final_tip_amount = st.number_input("输入总小费 ($)", value=float(system_calculated_tip), min_value=0.0)
@@ -364,6 +373,9 @@ with tabs[2]:
                     if final_tip_amount > 0 and t_dms:
                         t_recs = [{'记录日期':pd.to_datetime(datetime.now().date()),'员工姓名':e,'工作类型':'专属小费','时长(小时)':0.0,'当日薪资($)':final_tip_amount/len(t_dms)} for e in t_dms]
                         st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(t_recs)], ignore_index=True)
+                    
+                    st.toast("✅ 结算成功！账单已按分类入库。", icon="🎉")
+                    time.sleep(0.5)
                     st.rerun()
                 else:
                     st.error("入账总额不能为 0！")
@@ -378,7 +390,7 @@ with tabs[2]:
             st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=600, key="ed_l")
 
 # ==========================================
-# Tab 4: 经营报表 (保留了所有明细与百分比分析)
+# Tab 4: 经营报表
 # ==========================================
 with tabs[3]:
     st.header("📊 财务损益动态分析")
@@ -399,7 +411,8 @@ with tabs[3]:
             l_df['交易时间_dt'] = pd.to_datetime(l_df['交易时间']).dt.date
             mask = (l_df['交易时间_dt'] >= start_date) & (l_df['交易时间_dt'] <= end_date)
             filtered_l = l_df[mask]
-            # 总营业额：包含剧本、零食、会员充值 (排除了内部抵扣的会员余额)
+            
+            # V5.01 严格排除会员余额，这是绝对不会错的
             rev = filtered_l[filtered_l['支付方式'] != '会员余额']['入账总额($)'].sum()
             
         if not a_df.empty and '记录日期' in a_df.columns:
@@ -422,7 +435,7 @@ with tabs[3]:
         st.info("💡 财务引擎已启动【防重复计算】：会员充值款直接计入现金流，后续会员打本扣除余额的交易视为内部抵扣，不重复计算营收，确保报表与账户 100% 匹配。")
 
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("区间总营业额", f"${rev:,.2f}", "100% (计算基准)", delta_color="off")
+        m1.metric("区间总营业额", f"${rev:,.2f}", "100% (真实新增款)", delta_color="off")
         m2.metric("时薪支出", f"${wages:,.2f}", f"占营业额: {wages_pct:.1f}%", delta_color="inverse")
         m3.metric("小费支出", f"${tips:,.2f}", f"占营业额: {tips_pct:.1f}%", delta_color="inverse")
         m4.metric("房租成本", f"${rent:,.2f}", f"占营业额: {rent_pct:.1f}%", delta_color="inverse")
@@ -445,7 +458,7 @@ with tabs[3]:
                 st.info("期间无人工支出记录。")
 
 # ==========================================
-# Tab 5: 会员管理 (彻底修复搜索框覆盖数据库Bug)
+# Tab 5: 会员管理
 # ==========================================
 with tabs[4]:
     m_col1, m_col2 = st.columns([1, 2])
@@ -483,7 +496,6 @@ with tabs[4]:
         search_m = st.text_input("🔍 搜索姓名/电话 (清空搜索框进入编辑模式)", "")
         
         if search_m:
-            # 搜索模式：只能看，不能改，绝对保护数据库安全！
             mask = st.session_state['member_db']['会员姓名'].str.contains(search_m, case=False, na=False) | st.session_state['member_db']['电话号码'].str.contains(search_m, case=False, na=False)
             m_display = st.session_state['member_db'][mask]
             st.dataframe(m_display, use_container_width=True)
@@ -494,8 +506,7 @@ with tabs[4]:
                 safe_pattern = "|".join([re.escape(name) for name in matched_names])
                 m_logs = st.session_state['ledger_db'][st.session_state['ledger_db']['备注'].str.contains(safe_pattern, regex=True, na=False)]
                 st.write("📖 匹配会员的流水记录：")
-                st.dataframe(m_logs[['交易时间', '关联剧本', '入账总额($)', '备注']].sort_values('交易时间', ascending=False), use_container_width=True)
+                st.dataframe(m_logs[['交易时间', '关联剧本', '支付方式', '入账总额($)', '备注']].sort_values('交易时间', ascending=False), use_container_width=True)
         else:
-            # 编辑模式
             st.caption("✨ 双击表格可直接修改会员资料。")
             st.session_state['member_db'] = st.data_editor(st.session_state['member_db'], use_container_width=True, key="ed_m")

@@ -49,12 +49,21 @@ with tab1:
     with col2:
         st.subheader("当前剧本库")
         search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "", key="search_s")
-        display_scripts = st.session_state['scripts_db'].copy()
+        
+        # 核心更新：编辑与删除模式
         if search_script:
-            mask = display_scripts['剧本名称'].str.contains(search_script, case=False, na=False) | \
-                   display_scripts['主开DM'].str.contains(search_script, case=False, na=False)
-            display_scripts = display_scripts[mask]
-        st.dataframe(display_scripts, use_container_width=True)
+            mask = st.session_state['scripts_db']['剧本名称'].str.contains(search_script, case=False, na=False) | \
+                   st.session_state['scripts_db']['主开DM'].str.contains(search_script, case=False, na=False)
+            st.dataframe(st.session_state['scripts_db'][mask], use_container_width=True)
+            st.info("💡 提示：搜索状态下不可修改。清空搜索框即可进入编辑模式。")
+        else:
+            st.caption("✨ **编辑模式激活**：双击任意单元格可直接修改文字。勾选最左侧方框后，点击右上角 🗑️ 可删除整行。")
+            st.session_state['scripts_db'] = st.data_editor(
+                st.session_state['scripts_db'], 
+                num_rows="dynamic", # 允许动态增删行
+                use_container_width=True, 
+                key="edit_scripts"
+            )
 
 # --- Tab 2: 考勤与月度结算 ---
 with tab2:
@@ -69,6 +78,12 @@ with tab2:
                     new_emp = pd.DataFrame({'员工姓名': [emp_name], '时薪($)': [hourly_rate]})
                     st.session_state['employee_db'] = pd.concat([st.session_state['employee_db'], new_emp], ignore_index=True)
                     st.success(f"员工 {emp_name} 已录入系统")
+        
+        # 核心更新：员工名册编辑区
+        with st.expander("⚙️ 管理 / 修改员工名册 (删除员工或改时薪)"):
+            st.session_state['employee_db'] = st.data_editor(
+                st.session_state['employee_db'], num_rows="dynamic", use_container_width=True, key="edit_emp"
+            )
 
         st.divider()
         st.subheader("2. 快速录入考勤")
@@ -104,12 +119,22 @@ with tab2:
             month_df = df[df['记录日期'].dt.strftime('%Y-%m') == target_month]
             if search_emp:
                 month_df = month_df[month_df['员工姓名'].str.contains(search_emp, case=False, na=False)]
-            st.write(f"📅 {target_month} 费用明细")
+            
+            st.write(f"📅 {target_month} 费用明细 (只读)")
             st.dataframe(month_df, use_container_width=True)
+            
             if not month_df.empty:
                 summary = month_df.groupby('员工姓名').agg(总工时=('时长(小时)', 'sum'), 本月总计薪资=('当日薪资($)', 'sum')).reset_index()
                 st.dataframe(summary, use_container_width=True)
                 st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
+            
+            # 核心更新：考勤记录的超级编辑区
+            st.divider()
+            with st.expander("⚙️ 发现记错了？点击这里管理/修改【全部原始考勤记录】"):
+                st.caption("提示：双击修改，勾选最左侧可删除录错的记录。")
+                st.session_state['attendance_db'] = st.data_editor(
+                    st.session_state['attendance_db'], num_rows="dynamic", use_container_width=True, key="edit_att"
+                )
 
 # --- Tab 3: 收银记账 ---
 with tab3:
@@ -176,7 +201,6 @@ with tab3:
         if override_tip:
             tip_amount = st.number_input("手动输入小费($)", min_value=0.0, value=float(tip_amount))
             
-        # 核心更新：关联 DM 并自动分配小费
         dm_list = st.session_state['employee_db']['员工姓名'].tolist()
         tipped_dms = st.multiselect("🧑‍🏫 选择分配小费的 DM (将自动平分并记入薪资账单)", dm_list)
             
@@ -184,7 +208,6 @@ with tab3:
         
         if st.button("确认收账入库", type="primary"):
             if total_collected > 0:
-                # 1. 记录到 Tab 3 的流水账
                 def save_record(method, amt, rmb_original=None):
                     method_tip = amt * (tip_amount / total_collected) if total_collected > 0 else 0
                     final_note = pay_note
@@ -208,7 +231,6 @@ with tab3:
                 if alipay_usd > 0: save_record("支付宝", alipay_usd, alipay_rmb)
                 if wechat_usd > 0: save_record("微信", wechat_usd, wechat_rmb)
                 
-                # 2. 自动把小费记录到 Tab 2 的员工薪资表
                 if tip_amount > 0 and tipped_dms:
                     tip_per_dm = tip_amount / len(tipped_dms)
                     tip_records = []
@@ -231,33 +253,43 @@ with tab3:
         st.subheader("流水记录与多维统计")
         if not st.session_state['ledger_db'].empty:
             search_ledger = st.text_input("🔍 搜索剧本名称或备注查账", "", key="search_l")
-            display_ledger = st.session_state['ledger_db'].copy()
             
+            # 核心更新：流水账单超级编辑区
             if search_ledger:
+                display_ledger = st.session_state['ledger_db'].copy()
                 display_ledger = display_ledger[
                     display_ledger['关联剧本'].str.contains(search_ledger, case=False, na=False) | 
                     display_ledger['备注'].str.contains(search_ledger, case=False, na=False)
                 ]
-            
-            st.dataframe(display_ledger, use_container_width=True)
+                st.dataframe(display_ledger, use_container_width=True)
+                st.info("💡 提示：搜索状态下不可修改。清空搜索框即可进行编辑。")
+            else:
+                # 原始无搜索状态下，允许直接修改
+                st.caption("✨ **编辑模式**：双击修改单元格，勾选最左侧可删除多录或错录的流水。")
+                st.session_state['ledger_db'] = st.data_editor(
+                    st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, key="edit_ledger"
+                )
             
             st.divider()
             st.write("📈 **财务维度汇总 (全折算为 USD)**")
             
-            method_summary = display_ledger.groupby('支付方式').agg(
-                渠道总入账=('入账总额($)', 'sum'),
-                包含小费=('其中小费($)', 'sum')
-            ).reset_index()
-            
-            total_revenue = method_summary['渠道总入账'].sum()
-            total_tips = method_summary['包含小费'].sum()
-            pure_revenue = total_revenue - total_tips
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("💰 门店总入账 ($)", f"${total_revenue:,.2f}")
-            m2.metric("📊 剥离小费后净收", f"${pure_revenue:,.2f}")
-            m3.metric("✨ 累计沉淀小费", f"${total_tips:,.2f}")
-            
-            st.dataframe(method_summary, use_container_width=True)
+            # 确保统计用的 DataFrame 是最新的
+            display_ledger = st.session_state['ledger_db']
+            if not display_ledger.empty:
+                method_summary = display_ledger.groupby('支付方式').agg(
+                    渠道总入账=('入账总额($)', 'sum'),
+                    包含小费=('其中小费($)', 'sum')
+                ).reset_index()
+                
+                total_revenue = method_summary['渠道总入账'].sum()
+                total_tips = method_summary['包含小费'].sum()
+                pure_revenue = total_revenue - total_tips
+                
+                m1, m2, m3 = st.columns(3)
+                m1.metric("💰 门店总入账 ($)", f"${total_revenue:,.2f}")
+                m2.metric("📊 剥离小费后净收", f"${pure_revenue:,.2f}")
+                m3.metric("✨ 累计沉淀小费", f"${total_tips:,.2f}")
+                
+                st.dataframe(method_summary, use_container_width=True)
         else:
             st.info("暂无交易流水。")

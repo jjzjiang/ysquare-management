@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 
 st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
@@ -30,10 +30,10 @@ st.title("Y Square Studio 门店管理系统")
 tabs = st.tabs(["📚 剧本列表", "⏰ 员工考勤", "💵 收银台", "📊 财务报表", "💎 会员管理"])
 
 # ==========================================
-# Tab 1: 剧本列表管理
+# Tab 1: 剧本列表管理 (新增：动态关联开本次数)
 # ==========================================
 with tabs[0]:
-    col1, col2 = st.columns([1, 2])
+    col1, col2 = st.columns([1, 2.5])
     with col1:
         st.subheader("添加剧本场次")
         with st.form("add_script_form"):
@@ -42,14 +42,47 @@ with tabs[0]:
             s_price = st.number_input("单人原价 ($)", min_value=0.0, value=30.0)
             emp_list = st.session_state['employee_db']['员工姓名'].tolist()
             s_dm = st.selectbox("主开 DM", emp_list) if emp_list else st.text_input("主开 DM")
-            s_date = st.date_input("开本日期")
+            s_date = st.date_input("首开日期")
             if st.form_submit_button("确认录入"):
                 new_s = pd.DataFrame({'剧本名称':[s_name],'人数配置':[s_pax],'单人价格($)':[s_price],'主开DM':[s_dm],'日期':[s_date]})
                 st.session_state['scripts_db'] = pd.concat([st.session_state['scripts_db'], new_s], ignore_index=True)
                 st.rerun()
     with col2:
-        st.subheader("剧本库明细")
-        st.session_state['scripts_db'] = st.data_editor(st.session_state['scripts_db'], num_rows="dynamic", use_container_width=True, key="ed_s")
+        st.subheader("剧本库明细 (关联流水数据)")
+        
+        # 动态计算开本次数 (按交易时间去重，确保一车多笔付款算作1场)
+        display_db = st.session_state['scripts_db'].copy()
+        if not st.session_state['ledger_db'].empty:
+            # 过滤掉会员充值等非剧本交易
+            valid_ledger = st.session_state['ledger_db'][st.session_state['ledger_db']['关联剧本'] != '会员充值']
+            counts = valid_ledger.groupby('关联剧本')['交易时间'].nunique()
+            display_db['累计开本(场)'] = display_db['剧本名称'].map(counts).fillna(0).astype(int)
+        else:
+            display_db['累计开本(场)'] = 0
+            
+        # 调整列顺序，把开本次数放在前面
+        cols = ['剧本名称', '累计开本(场)', '人数配置', '单人价格($)', '主开DM', '日期']
+        display_db = display_db[cols]
+        
+        search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "", key="search_s")
+        if search_script:
+            mask = display_db['剧本名称'].str.contains(search_script, case=False, na=False) | display_db['主开DM'].str.contains(search_script, case=False, na=False)
+            st.dataframe(display_db[mask], use_container_width=True)
+            st.info("💡 清空搜索框即可进入修改模式。")
+        else:
+            st.caption("✨ **直接编辑模式**：双击单元格修改。`累计开本(场)` 由系统自动关联计算，不可手动修改。")
+            # 配置表格，锁定累计开本列
+            edited_db = st.data_editor(
+                display_db, 
+                num_rows="dynamic", 
+                use_container_width=True, 
+                key="ed_s",
+                column_config={
+                    "累计开本(场)": st.column_config.NumberColumn(disabled=True, help="根据收银台结算次数自动汇总")
+                }
+            )
+            # 将编辑后的数据存回数据库，同时剥离掉动态生成的计算列
+            st.session_state['scripts_db'] = edited_db.drop(columns=['累计开本(场)'], errors='ignore')
 
 # ==========================================
 # Tab 2: 员工考勤与薪资
@@ -89,7 +122,7 @@ with tabs[1]:
         st.session_state['attendance_db'] = st.data_editor(st.session_state['attendance_db'], num_rows="dynamic", use_container_width=True, key="ed_att")
 
 # ==========================================
-# Tab 3: 收银台 (修复会员小费强制计算逻辑)
+# Tab 3: 收银台
 # ==========================================
 with tabs[2]:
     c_p1, c_p2 = st.columns([1, 1.4])
@@ -161,11 +194,8 @@ with tabs[2]:
                             
                     total_explicit_member_tip += m_tip
                     target_deduct = discounted_single + m_tip
-                    
-                    # 核心修复：明确显示总计金额
                     st.markdown(f"👉 **该会员本次消费总计 (票价 + 小费): ${target_deduct:.2f}**")
                     
-                    # 核心修复：强制刷新扣款框的值！通过把 target_deduct 放入 key 中，一旦金额改变，输入框会瞬间重置为新的正确计算值。
                     deduct_amt = st.number_input(
                         f"💳 实际从 {m} 余额扣除", 
                         min_value=0.0, max_value=max(balance, 0.0), value=float(min(target_deduct, balance)), step=1.0, key=f"deduct_{m}_{target_deduct}"
@@ -195,7 +225,7 @@ with tabs[2]:
             st.caption(f"📊 本车包含 {len(selected_members)} 位会员，动态折后应收总款应为：**${actual_expected_total:.2f}**")
             
             if system_calculated_tip > 0:
-                st.success(f"🧾 最终实收 **${total_collected:.2f}**。包含会员小费 **${total_explicit_member_tip:.2f}**，溢出小费 **${extra_overflow_tip:.2f}**，系统计算总小费: **${system_calculated_tip:.2f}**")
+                st.success(f"🧾 最终实收 **${total_collected:.2f}**。包含会员小费 **${total_explicit_member_tip:.2f}**，溢出小费 **${extra_overflow_tip:.2f}**，系统总小费: **${system_calculated_tip:.2f}**")
             else:
                 st.info(f"🧾 最终实收 **${total_collected:.2f}**")
                 
@@ -218,7 +248,6 @@ with tabs[2]:
                     
                     for m, amt in member_deductions.items():
                         st.session_state['member_db'].loc[st.session_state['member_db']['会员姓名']==m, '当前余额($)'] -= amt
-                        # 会员流水中，小费按比例分配，确保报表对账一致
                         m_tip = amt * (final_tip_amount / total_collected) if total_collected > 0 else 0
                         m_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[h_dm],'支付方式':['会员余额'],'入账总额($)':[amt],'其中小费($)':[m_tip],'备注':[f"会员 [{m}] 扣款 | {note}"]})
                         st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], m_log], ignore_index=True)
@@ -257,38 +286,86 @@ with tabs[2]:
             st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=550, key="ed_l")
 
 # ==========================================
-# Tab 4: 经营报表
+# Tab 4: 经营报表 (全新升级：自由选择日期范围)
 # ==========================================
 with tabs[3]:
-    st.header("📊 财务损益分析")
-    rent = st.number_input("月房租设置 ($)", value=7000.0)
+    st.header("📊 财务损益动态分析")
+    
+    col_d1, col_d2 = st.columns([1, 2])
+    with col_d1:
+        rent = st.number_input("🏠 设定此筛选期间的房租/固定支出 ($)", value=7000.0, step=100.0)
+    with col_d2:
+        today = datetime.now().date()
+        start_of_month = today.replace(day=1)
+        # 支持日期范围选择
+        date_range = st.date_input("📅 选择财务统计范围 (开始与结束日期)", value=(start_of_month, today))
+        
     st.divider()
+
+    if len(date_range) == 2:
+        start_date, end_date = date_range
+    elif len(date_range) == 1:
+        start_date = end_date = date_range[0]
+    else:
+        st.stop()
+
     l_df = st.session_state['ledger_db'].copy()
     a_df = st.session_state['attendance_db'].copy()
     
+    rev = 0.0
+    tips = 0.0
+    wages = 0.0
+
+    # 过滤时间段内的流水
     if not l_df.empty:
-        l_df['交易时间'] = pd.to_datetime(l_df['交易时间'])
-        l_df['月'] = l_df['交易时间'].dt.strftime('%Y-%m')
-        rev = l_df.groupby('月')['入账总额($)'].sum()
+        l_df['交易时间_dt'] = pd.to_datetime(l_df['交易时间']).dt.date
+        mask_l = (l_df['交易时间_dt'] >= start_date) & (l_df['交易时间_dt'] <= end_date)
+        filtered_l = l_df[mask_l]
+        rev = filtered_l['入账总额($)'].sum()
         
-        if not a_df.empty and '记录日期' in a_df.columns:
-            a_df['记录日期'] = pd.to_datetime(a_df['记录日期'])
-            a_df['月'] = a_df['记录日期'].dt.strftime('%Y-%m')
-            tips = a_df[a_df['工作类型']=='专属小费'].groupby('月')['当日薪资($)'].sum()
-            wages = a_df[a_df['工作类型']!='专属小费'].groupby('月')['当日薪资($)'].sum()
-            
-            report = pd.DataFrame({'营收':rev, '员工工资':wages, '小费支出':tips}).fillna(0)
-            report['房租'] = rent
-            report['净利润'] = report['营收'] - report['员工工资'] - report['小费支出'] - report['房租']
-            st.table(report.sort_index(ascending=False).style.format("${:,.2f}"))
-            
-            if not report.empty:
-                last = report.iloc[-1]
-                cols = st.columns(4)
-                cols[0].metric("最新月营收", f"${last['营收']:,.2f}")
-                cols[1].metric("工资占比", f"{ (last['员工工资']/last['营收']*100 if last['营收']>0 else 0):.1f}%")
-                cols[2].metric("小费占比", f"{ (last['小费支出']/last['营收']*100 if last['营收']>0 else 0):.1f}%")
-                cols[3].metric("月净利润", f"${last['净利润']:,.2f}")
+    # 过滤时间段内的考勤支出
+    if not a_df.empty and '记录日期' in a_df.columns:
+        a_df['记录日期_dt'] = pd.to_datetime(a_df['记录日期']).dt.date
+        mask_a = (a_df['记录日期_dt'] >= start_date) & (a_df['记录日期_dt'] <= end_date)
+        filtered_a = a_df[mask_a]
+        tips = filtered_a[filtered_a['工作类型'] == '专属小费']['当日薪资($)'].sum()
+        wages = filtered_a[filtered_a['工作类型'] != '专属小费']['当日薪资($)'].sum()
+
+    profit = rev - wages - tips - rent
+
+    # 计算占比
+    if rev > 0:
+        wages_pct = (wages / rev) * 100
+        tips_pct = (tips / rev) * 100
+        rent_pct = (rent / rev) * 100
+        profit_pct = (profit / rev) * 100
+    else:
+        wages_pct = tips_pct = rent_pct = profit_pct = 0.0
+
+    st.subheader(f"📊 {start_date} 至 {end_date} 核心财务指标")
+    
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("区间总流水", f"${rev:,.2f}", "100% (计算基准)")
+    m2.metric("员工时薪支出", f"${wages:,.2f}", f"占营收: {wages_pct:.1f}%", delta_color="inverse")
+    m3.metric("DM专属小费支出", f"${tips:,.2f}", f"占营收: {tips_pct:.1f}%", delta_color="inverse")
+    m4.metric("固定房租成本", f"${rent:,.2f}", f"占营收: {rent_pct:.1f}%", delta_color="inverse")
+    m5.metric("区间净利润", f"${profit:,.2f}", f"净利润率: {profit_pct:.1f}%")
+
+    st.divider()
+    st.write("📝 **期间明细参考**")
+    c_sub1, c_sub2 = st.columns(2)
+    with c_sub1:
+        st.caption("🧾 流水入账记录")
+        if not l_df.empty and not filtered_l.empty:
+            st.dataframe(filtered_l[['交易时间', '关联剧本', '支付方式', '入账总额($)']], use_container_width=True)
+        else:
+            st.info("期间无入账记录。")
+    with c_sub2:
+        st.caption("🧑‍🏫 员工薪资产生")
+        if not a_df.empty and not filtered_a.empty:
+            st.dataframe(filtered_a[['记录日期', '员工姓名', '工作类型', '当日薪资($)']], use_container_width=True)
+        else:
+            st.info("期间无人工支出记录。")
 
 # ==========================================
 # Tab 5: 会员记录

@@ -23,14 +23,19 @@ else:
         
 if 'ledger_db' not in st.session_state:
     st.session_state['ledger_db'] = pd.DataFrame(columns=['交易时间', '关联剧本', '主开DM', '支付方式', '入账总额($)', '其中小费($)', '备注'])
+    
+# 【会员数据库升级：新增电话号码并向下兼容】
 if 'member_db' not in st.session_state:
-    st.session_state['member_db'] = pd.DataFrame(columns=['会员姓名', '当前余额($)', '折扣率', '累计充值($)', '入会日期'])
+    st.session_state['member_db'] = pd.DataFrame(columns=['会员姓名', '电话号码', '当前余额($)', '折扣率', '累计充值($)', '入会日期'])
+else:
+    if '电话号码' not in st.session_state['member_db'].columns:
+        st.session_state['member_db'].insert(1, '电话号码', "")
 
 st.title("Y Square Studio 门店管理系统")
 tabs = st.tabs(["📚 剧本列表", "⏰ 员工考勤", "💵 收银台", "📊 财务报表", "💎 会员管理"])
 
 # ==========================================
-# Tab 1: 剧本列表管理 (动态关联开本次数)
+# Tab 1: 剧本列表管理
 # ==========================================
 with tabs[0]:
     col1, col2 = st.columns([1, 2.5])
@@ -114,14 +119,13 @@ with tabs[1]:
         st.session_state['attendance_db'] = st.data_editor(st.session_state['attendance_db'], num_rows="dynamic", use_container_width=True, key="ed_att")
 
 # ==========================================
-# Tab 3: 收银台 (财务防双重计算基石)
+# Tab 3: 收银台
 # ==========================================
 with tabs[2]:
     st.subheader("📈 门店现金流监控大盘")
     display_ledger = st.session_state['ledger_db']
     
     if not display_ledger.empty:
-        # 核心防重复：排除会员余额消费，只算真金白银（包含会员在Tab 5的充值）
         actual_cash_in = display_ledger[display_ledger['支付方式'] != '会员余额']['入账总额($)'].sum()
         total_tips = display_ledger['其中小费($)'].sum()
         net_cash = actual_cash_in - total_tips
@@ -153,7 +157,6 @@ with tabs[2]:
             st.info(f"💡 **剧本标准价**：单人 ${single_price:.2f} × {pax}人 = 满编标准总价 **${base_price:.2f}**")
             st.divider()
 
-            # --- 1. 常规外部支付通道 ---
             st.write("💰 **外部拆分支付输入 (未付渠道留空)**")
             col_u1, col_u2 = st.columns(2)
             v_usd = col_u1.number_input("📱 Venmo ($)", min_value=0.0, step=1.0)
@@ -168,7 +171,6 @@ with tabs[2]:
             
             external_total = v_usd + z_usd + c_usd + tr_usd + (ali_rmb/ex_rate if ex_rate > 0 else 0) + (wx_rmb/ex_rate if ex_rate > 0 else 0)
 
-            # --- 2. 会员独立AA扣款与小费 ---
             st.divider()
             st.write("💎 **选择会员消费 (自动打折与防超扣)**")
             m_list = st.session_state['member_db']['会员姓名'].tolist()
@@ -215,7 +217,6 @@ with tabs[2]:
                     if idx < len(selected_members) - 1:
                         st.write("---")
                         
-            # --- 3. 全局动态对账与结算 ---
             st.divider()
             st.write("✨ **财务对账与结算**")
             
@@ -293,7 +294,7 @@ with tabs[2]:
             st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=550, key="ed_l")
 
 # ==========================================
-# Tab 4: 经营报表 (完美现金流防双重计算)
+# Tab 4: 经营报表
 # ==========================================
 with tabs[3]:
     st.header("📊 财务损益动态分析")
@@ -328,9 +329,7 @@ with tabs[3]:
         mask_l = (l_df['交易时间_dt'] >= start_date) & (l_df['交易时间_dt'] <= end_date)
         filtered_l = l_df[mask_l]
         
-        # 核心防重复：实际现金流 (剔除会员余额扣除部分，充值已经算过了！)
         cash_rev = filtered_l[filtered_l['支付方式'] != '会员余额']['入账总额($)'].sum()
-        # 内部对账参考：剧本纯产值 (剔除会员充值，只看开本营业额)
         service_rev = filtered_l[filtered_l['关联剧本'] != '会员充值']['入账总额($)'].sum()
         
     if not a_df.empty and '记录日期' in a_df.columns:
@@ -379,7 +378,7 @@ with tabs[3]:
             st.info("期间无人工支出记录。")
 
 # ==========================================
-# Tab 5: 会员记录 (新增：独立续费选项)
+# Tab 5: 会员记录 (升级：添加电话号码)
 # ==========================================
 with tabs[4]:
     m_col1, m_col2 = st.columns([1, 2])
@@ -410,6 +409,7 @@ with tabs[4]:
                 
         else:
             m_name = st.text_input("新会员姓名")
+            m_phone = st.text_input("联系电话 (选填)", placeholder="方便后续短信联系或防止重名")
             m_recharge = st.number_input("首充金额 ($)", min_value=0.0, step=50.0)
             m_discount = st.selectbox("会员折扣率", [1.0, 0.9, 0.88, 0.8, 0.75], format_func=lambda x: f"{x*100:.0f}折" if x<1 else "无折扣")
             m_pay = st.selectbox("支付方式", ["Venmo", "Zelle", "现金", "转账", "微信", "支付宝"], key="n_pay")
@@ -417,9 +417,9 @@ with tabs[4]:
             if st.button("🚀 确认开卡入账", type="primary"):
                 if m_name:
                     if m_name in st.session_state['member_db']['会员姓名'].values:
-                        st.error("该会员已存在！请切换到【老会员充值 (续费)】。")
+                        st.error("该会员姓名已存在！请切换到【老会员充值 (续费)】，或在姓名后添加字母以作区分。")
                     else:
-                        new_m = pd.DataFrame({'会员姓名':[m_name],'当前余额($)':[m_recharge],'折扣率':[m_discount],'累计充值($)':[m_recharge],'入会日期':[datetime.now().strftime("%Y-%m-%d")]})
+                        new_m = pd.DataFrame({'会员姓名':[m_name], '电话号码':[m_phone], '当前余额($)':[m_recharge],'折扣率':[m_discount],'累计充值($)':[m_recharge],'入会日期':[datetime.now().strftime("%Y-%m-%d")]})
                         st.session_state['member_db'] = pd.concat([st.session_state['member_db'], new_m], ignore_index=True)
                         if m_recharge > 0:
                             new_r = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':['会员充值'],'主开DM':['-'],'支付方式':[m_pay],'入账总额($)':[m_recharge],'其中小费($)':[0.0],'备注':[f"新会员开卡: {m_name}"]})
@@ -432,11 +432,15 @@ with tabs[4]:
 
     with m_col2:
         st.subheader("📋 会员名册与消费记录")
-        search_m = st.text_input("🔍 搜索会员", "")
+        search_m = st.text_input("🔍 搜索会员 (支持姓名或电话搜索)", "")
         m_display = st.session_state['member_db'].copy()
-        if search_m:
-            m_display = m_display[m_display['会员姓名'].str.contains(search_m, case=False)]
         
+        # 支持按名字或电话进行模糊搜索
+        if search_m:
+            mask = m_display['会员姓名'].str.contains(search_m, case=False, na=False) | m_display['电话号码'].str.contains(search_m, case=False, na=False)
+            m_display = m_display[mask]
+        
+        st.caption("✨ 双击表格可直接修改会员资料 (包括补填老会员的电话号码)。")
         m_display = st.data_editor(m_display, use_container_width=True, key="ed_m")
         st.session_state['member_db'] = m_display
         
@@ -444,5 +448,5 @@ with tabs[4]:
         st.subheader("📖 会员历史消费明细")
         if search_m and not st.session_state['ledger_db'].empty:
             m_logs = st.session_state['ledger_db'][st.session_state['ledger_db']['备注'].str.contains(f"会员 \[[{search_m}]\]", regex=True, na=False) | st.session_state['ledger_db']['备注'].str.contains(f"{search_m}", na=False)]
-            st.write(f"正在查看 {search_m} 的流水记录：")
+            st.write(f"正在查看匹配会员的流水记录：")
             st.dataframe(m_logs[['交易时间', '关联剧本', '支付方式', '入账总额($)', '备注']], use_container_width=True)

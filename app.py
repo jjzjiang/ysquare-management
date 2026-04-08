@@ -24,7 +24,9 @@ st.title("Y Square Studio 门店管理系统")
 
 tab1, tab2, tab3 = st.tabs(["📚 剧本列表管理", "⏰ 员工考勤与薪资", "💵 收银与流水记录"])
 
-# --- Tab 1: 剧本管理 ---
+# ==========================================
+# Tab 1: 剧本管理
+# ==========================================
 with tab1:
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -50,22 +52,27 @@ with tab1:
         st.subheader("当前剧本库")
         search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "", key="search_s")
         
-        # 核心更新：编辑与删除模式
+        display_scripts = st.session_state['scripts_db'].copy()
         if search_script:
-            mask = st.session_state['scripts_db']['剧本名称'].str.contains(search_script, case=False, na=False) | \
-                   st.session_state['scripts_db']['主开DM'].str.contains(search_script, case=False, na=False)
-            st.dataframe(st.session_state['scripts_db'][mask], use_container_width=True)
-            st.info("💡 提示：搜索状态下不可修改。清空搜索框即可进入编辑模式。")
-        else:
-            st.caption("✨ **编辑模式激活**：双击任意单元格可直接修改文字。勾选最左侧方框后，点击右上角 🗑️ 可删除整行。")
-            st.session_state['scripts_db'] = st.data_editor(
-                st.session_state['scripts_db'], 
-                num_rows="dynamic", # 允许动态增删行
-                use_container_width=True, 
-                key="edit_scripts"
-            )
+            mask = display_scripts['剧本名称'].str.contains(search_script, case=False, na=False) | \
+                   display_scripts['主开DM'].str.contains(search_script, case=False, na=False)
+            display_scripts = display_scripts[mask]
+        
+        st.dataframe(display_scripts, use_container_width=True)
+        
+        # 显式删除功能
+        with st.expander("🗑️ 删除错误剧本记录"):
+            if not display_scripts.empty:
+                del_options = display_scripts.apply(lambda row: f"{row['日期']} | {row['剧本名称']} | DM: {row['主开DM']}", axis=1)
+                del_idx = st.selectbox("选择要删除的剧本", display_scripts.index, format_func=lambda x: del_options[x], key="del_script")
+                if st.button("🚨 确认删除此剧本"):
+                    st.session_state['scripts_db'] = st.session_state['scripts_db'].drop(del_idx).reset_index(drop=True)
+                    st.success("删除成功！")
+                    st.rerun()
 
-# --- Tab 2: 考勤与月度结算 ---
+# ==========================================
+# Tab 2: 考勤与月度结算
+# ==========================================
 with tab2:
     col_left, col_right = st.columns([1, 2])
     with col_left:
@@ -79,11 +86,15 @@ with tab2:
                     st.session_state['employee_db'] = pd.concat([st.session_state['employee_db'], new_emp], ignore_index=True)
                     st.success(f"员工 {emp_name} 已录入系统")
         
-        # 核心更新：员工名册编辑区
-        with st.expander("⚙️ 管理 / 修改员工名册 (删除员工或改时薪)"):
-            st.session_state['employee_db'] = st.data_editor(
-                st.session_state['employee_db'], num_rows="dynamic", use_container_width=True, key="edit_emp"
-            )
+        # 删除员工功能
+        with st.expander("🗑️ 删除离职/输错的员工"):
+            if not st.session_state['employee_db'].empty:
+                emp_del_options = st.session_state['employee_db'].apply(lambda row: f"{row['员工姓名']} (时薪: ${row['时薪($)']})", axis=1)
+                emp_del_idx = st.selectbox("选择要删除的员工", st.session_state['employee_db'].index, format_func=lambda x: emp_del_options[x], key="del_emp")
+                if st.button("🚨 确认删除此员工"):
+                    st.session_state['employee_db'] = st.session_state['employee_db'].drop(emp_del_idx).reset_index(drop=True)
+                    st.success("员工已删除！")
+                    st.rerun()
 
         st.divider()
         st.subheader("2. 快速录入考勤")
@@ -117,26 +128,36 @@ with tab2:
             all_months = df['记录日期'].dt.strftime('%Y-%m').unique().tolist()
             target_month = st.selectbox("选择统计月份", sorted(all_months, reverse=True))
             month_df = df[df['记录日期'].dt.strftime('%Y-%m') == target_month]
+            
             if search_emp:
                 month_df = month_df[month_df['员工姓名'].str.contains(search_emp, case=False, na=False)]
             
-            st.write(f"📅 {target_month} 费用明细 (只读)")
-            st.dataframe(month_df, use_container_width=True)
+            st.write(f"📅 {target_month} 费用明细")
+            # 这里保留双击编辑功能，方便改数字
+            edited_month_df = st.data_editor(month_df, use_container_width=True, key="edit_att")
+            
+            # 把编辑的结果同步回数据库
+            if not edited_month_df.equals(month_df):
+                 st.session_state['attendance_db'].update(edited_month_df)
             
             if not month_df.empty:
                 summary = month_df.groupby('员工姓名').agg(总工时=('时长(小时)', 'sum'), 本月总计薪资=('当日薪资($)', 'sum')).reset_index()
                 st.dataframe(summary, use_container_width=True)
                 st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
             
-            # 核心更新：考勤记录的超级编辑区
-            st.divider()
-            with st.expander("⚙️ 发现记错了？点击这里管理/修改【全部原始考勤记录】"):
-                st.caption("提示：双击修改，勾选最左侧可删除录错的记录。")
-                st.session_state['attendance_db'] = st.data_editor(
-                    st.session_state['attendance_db'], num_rows="dynamic", use_container_width=True, key="edit_att"
-                )
+            # 显式删除考勤功能
+            with st.expander("🗑️ 删除错误的考勤 / 演绎 / 小费记录"):
+                if not month_df.empty:
+                    att_del_options = month_df.apply(lambda row: f"{row['记录日期'].strftime('%Y-%m-%d')} | {row['员工姓名']} | {row['工作类型']} | 薪资: ${row['当日薪资($)']}", axis=1)
+                    att_del_idx = st.selectbox("选择要删除的记录", month_df.index, format_func=lambda x: att_del_options[x], key="del_att")
+                    if st.button("🚨 确认删除此记录"):
+                        st.session_state['attendance_db'] = st.session_state['attendance_db'].drop(att_del_idx).reset_index(drop=True)
+                        st.success("记录已删除！")
+                        st.rerun()
 
-# --- Tab 3: 收银记账 ---
+# ==========================================
+# Tab 3: 收银记账
+# ==========================================
 with tab3:
     col_pay1, col_pay2 = st.columns([1, 1.2])
     
@@ -254,27 +275,31 @@ with tab3:
         if not st.session_state['ledger_db'].empty:
             search_ledger = st.text_input("🔍 搜索剧本名称或备注查账", "", key="search_l")
             
-            # 核心更新：流水账单超级编辑区
+            display_ledger = st.session_state['ledger_db'].copy()
             if search_ledger:
-                display_ledger = st.session_state['ledger_db'].copy()
                 display_ledger = display_ledger[
                     display_ledger['关联剧本'].str.contains(search_ledger, case=False, na=False) | 
                     display_ledger['备注'].str.contains(search_ledger, case=False, na=False)
                 ]
-                st.dataframe(display_ledger, use_container_width=True)
-                st.info("💡 提示：搜索状态下不可修改。清空搜索框即可进行编辑。")
-            else:
-                # 原始无搜索状态下，允许直接修改
-                st.caption("✨ **编辑模式**：双击修改单元格，勾选最左侧可删除多录或错录的流水。")
-                st.session_state['ledger_db'] = st.data_editor(
-                    st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, key="edit_ledger"
-                )
+            
+            # 双击修改保留
+            edited_ledger = st.data_editor(display_ledger, use_container_width=True, key="edit_ledger")
+            if not edited_ledger.equals(display_ledger):
+                 st.session_state['ledger_db'].update(edited_ledger)
+                 
+            # 显式删除流水功能
+            with st.expander("🗑️ 录错流水了？点此永久删除"):
+                if not display_ledger.empty:
+                    ledger_del_options = display_ledger.apply(lambda row: f"{row['交易时间']} | {row['关联剧本']} | {row['支付方式']} | ${row['入账总额($)']}", axis=1)
+                    ledger_del_idx = st.selectbox("选择要删除的流水", display_ledger.index, format_func=lambda x: ledger_del_options[x], key="del_ledger_record")
+                    if st.button("🚨 确认删除此流水"):
+                        st.session_state['ledger_db'] = st.session_state['ledger_db'].drop(ledger_del_idx).reset_index(drop=True)
+                        st.success("流水已删除！")
+                        st.rerun()
             
             st.divider()
             st.write("📈 **财务维度汇总 (全折算为 USD)**")
             
-            # 确保统计用的 DataFrame 是最新的
-            display_ledger = st.session_state['ledger_db']
             if not display_ledger.empty:
                 method_summary = display_ledger.groupby('支付方式').agg(
                     渠道总入账=('入账总额($)', 'sum'),

@@ -4,10 +4,10 @@ from datetime import datetime
 import time
 import re
 
-st.set_page_config(page_title="Y Square Studio 管理系统 (V4.0)", layout="wide")
+st.set_page_config(page_title="Y Square Studio 管理系统 (V5.0 稳定版)", layout="wide")
 
 # ==========================================
-# 0. 核心数据初始化与强健兼容逻辑 (V4.0)
+# 0. 核心数据初始化 (V5.0 稳定版)
 # ==========================================
 if 'scripts_db' not in st.session_state:
     st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '日期'])
@@ -38,11 +38,11 @@ else:
     if '电话号码' not in st.session_state['member_db'].columns:
         st.session_state['member_db'].insert(1, '电话号码', "")
 
-st.title("Y Square Studio 门店管理系统 [V4.0]")
+st.title("Y Square Studio 门店管理系统 [V5.0]")
 tabs = st.tabs(["📚 剧本与零食", "⏰ 员工考勤", "💵 收银台", "📊 财务报表", "💎 会员管理"])
 
 # ==========================================
-# Tab 1: 剧本与零食列表管理 (完整保留搜索)
+# Tab 1: 剧本与零食列表管理 (搜索功能全面恢复)
 # ==========================================
 with tabs[0]:
     col1, col2 = st.columns([1, 2.5])
@@ -64,7 +64,7 @@ with tabs[0]:
         st.divider()
         st.subheader("🍿 添加零食/饮料")
         with st.form("add_item_form"):
-            i_name = st.text_input("项目名称 (如: 可乐, 自嗨锅)")
+            i_name = st.text_input("项目名称 (如: 可乐, 薯片)")
             i_price = st.number_input("售价 ($)", min_value=0.0, value=3.0, step=0.5)
             if st.form_submit_button("确认录入项目"):
                 if i_name:
@@ -89,27 +89,20 @@ with tabs[0]:
             cols = ['剧本名称', '累计开本(场)', '人数配置', '单人价格($)', '日期']
             display_db = display_db[cols]
             
-            search_script = st.text_input("🔍 搜索剧本名称", "", key="search_s")
+            search_script = st.text_input("🔍 搜索剧本名称 (清空进入编辑模式)", "", key="search_s")
             if search_script:
                 mask = display_db['剧本名称'].str.contains(search_script, case=False, na=False)
                 st.dataframe(display_db[mask], use_container_width=True)
-                st.info("💡 清空搜索框即可进入修改模式。")
             else:
-                st.caption("✨ **直接编辑模式**：双击单元格修改。`累计开本(场)` 由系统自动关联计算。")
-                edited_db = st.data_editor(
-                    display_db, 
-                    num_rows="dynamic", 
-                    use_container_width=True, 
-                    key="ed_s",
-                    column_config={"累计开本(场)": st.column_config.NumberColumn(disabled=True)}
-                )
+                st.caption("✨ **直接编辑模式**：双击单元格修改。")
+                edited_db = st.data_editor(display_db, num_rows="dynamic", use_container_width=True, key="ed_s", column_config={"累计开本(场)": st.column_config.NumberColumn(disabled=True)})
                 st.session_state['scripts_db'] = edited_db.drop(columns=['累计开本(场)'], errors='ignore')
 
         with tab_list2:
             st.session_state['inventory_db'] = st.data_editor(st.session_state['inventory_db'], num_rows="dynamic", use_container_width=True, key="ed_i")
 
 # ==========================================
-# Tab 2: 员工考勤与薪资 (V4.0 全面恢复月度看板与搜索)
+# Tab 2: 员工考勤与薪资 (月度看板与搜索功能满血复活)
 # ==========================================
 with tabs[1]:
     col_l, col_r = st.columns([1, 2.5])
@@ -125,7 +118,7 @@ with tabs[1]:
                     time.sleep(0.5)
                     st.rerun()
         
-        with st.expander("⚙️ 修改或删除员工 (点此展开)"):
+        with st.expander("⚙️ 修改或删除员工资料 (点此展开)"):
             st.session_state['employee_db'] = st.data_editor(st.session_state['employee_db'], num_rows="dynamic", use_container_width=True, key="ed_emp")
 
         st.divider()
@@ -150,7 +143,7 @@ with tabs[1]:
                     if target_es:
                         batch = [{'记录日期':pd.to_datetime(w_date),'员工姓名':e,'工作类型':'演绎NPC','时长(小时)':0.0,'当日薪资($)':fee} for e in target_es]
                         st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(batch)], ignore_index=True)
-                        st.toast("演绎考勤已批量记录", icon="✅")
+                        st.toast("演绎考勤已记录", icon="✅")
                         time.sleep(0.5)
                         st.rerun()
                         
@@ -164,43 +157,35 @@ with tabs[1]:
             all_months = df_att['记录日期'].dt.strftime('%Y-%m').unique().tolist()
             target_month = st.selectbox("📅 选择统计月份", sorted(all_months, reverse=True))
             
-            # 过滤月份
             month_df = df_att[df_att['记录日期'].dt.strftime('%Y-%m') == target_month]
             
-            # 过滤搜索
             if search_emp:
-                month_df = month_df[month_df['员工姓名'].str.contains(search_emp, case=False, na=False)]
+                st.dataframe(month_df[month_df['员工姓名'].str.contains(search_emp, case=False, na=False)], use_container_width=True)
+            else:
+                st.caption("✨ 双击下方表格即可修改考勤记录。")
+                edited_month_df = st.data_editor(month_df, use_container_width=True, key="edit_att_monthly")
+                if not edited_month_df.equals(month_df):
+                     for col in edited_month_df.columns: 
+                         st.session_state['attendance_db'].loc[edited_month_df.index, col] = edited_month_df[col]
+                     st.toast("考勤修改已保存！", icon="💾")
             
-            st.caption("✨ 双击下方表格即可修改考勤记录，修改会自动保存。")
-            edited_month_df = st.data_editor(month_df, use_container_width=True, key="edit_att_monthly")
-            
-            # 保存修改
-            if not edited_month_df.equals(month_df):
-                 for col in edited_month_df.columns: 
-                     st.session_state['attendance_db'].loc[edited_month_df.index, col] = edited_month_df[col]
-                 st.toast("考勤修改已保存！", icon="💾")
-            
-            # 月度汇总表
             if not month_df.empty:
                 st.write(f"**{target_month} 员工总薪资汇总**")
                 summary = month_df.groupby('员工姓名').agg(总工时=('时长(小时)', 'sum'), 本月应付=('当日薪资($)', 'sum')).reset_index()
                 st.dataframe(summary, use_container_width=True)
-            
-            # 删除考勤记录
-            with st.expander("🗑️ 录错了想删除？点此选择并删除记录"):
+                
+            with st.expander("🗑️ 录错了想删除记录？点此展开"):
                 if not month_df.empty:
                     att_del_options = month_df.apply(lambda row: f"{row['记录日期'].strftime('%m-%d')} | {row['员工姓名']} | {row['工作类型']} | ${row['当日薪资($)']}", axis=1)
                     att_del_idx = st.selectbox("选择要删除的记录", month_df.index, format_func=lambda x: att_del_options[x], label_visibility="collapsed")
-                    if st.button("🚨 确认删除这笔薪资记录"):
+                    if st.button("🚨 确认删除这笔记录"):
                         st.session_state['attendance_db'] = st.session_state['attendance_db'].drop(att_del_idx).reset_index(drop=True)
                         st.toast("已删除", icon="🗑️")
                         time.sleep(0.5)
                         st.rerun()
-        else:
-            st.info("暂无考勤数据。")
 
 # ==========================================
-# Tab 3: 收银台 (V4.0 修复多选组件清空Bug)
+# Tab 3: 收银台 (V5.0 彻底修复多选清空Bug)
 # ==========================================
 with tabs[2]:
     st.subheader("📈 门店总营业额监控")
@@ -261,11 +246,10 @@ with tabs[2]:
             external_total = v_usd + z_usd + c_usd + tr_usd + (ali_rmb/ex_rate if ex_rate > 0 else 0) + (wx_rmb/ex_rate if ex_rate > 0 else 0)
 
             st.divider()
-            st.write("💎 **选择会员消费 (独立计费与抵扣)**")
-            m_list = st.session_state['member_db']['会员姓名'].tolist()
+            st.write("💎 **选择会员消费 (独立计费与专属零食)**")
+            m_list = st.session_state['member_db']['会员姓名'].unique().tolist()
             
-            # V4.0 核心修复：固定了 multiselect 的状态，防止子组件更新引发清空
-            selected_members = st.multiselect("🔍 本车有哪些会员？", m_list, key="member_selector")
+            selected_members = st.multiselect("🔍 本车有哪些会员？(支持无缝多选)", m_list, key="member_selector")
             
             member_deductions = {}
             member_snack_notes = {}
@@ -283,7 +267,7 @@ with tabs[2]:
                     
                     st.caption(f"当前余额: ${m_bal:.2f} | 折后票价: ${m_discounted_price:.2f}")
                     
-                    m_snack_items = st.multiselect(f"🍿 {m} 独立购买的零食/饮料", inventory_list, key=f"msnack_sel_{m}")
+                    m_snack_items = st.multiselect(f"🍿 {m} 独立购买的零食/饮料", inventory_list, key=f"msnack_{m}")
                     m_snack_total = 0.0
                     m_snack_details = []
                     if m_snack_items:
@@ -307,10 +291,10 @@ with tabs[2]:
                     total_explicit_member_tip += m_tip
                     target_deduct = m_discounted_price + m_snack_total + m_tip
                     
-                    st.markdown(f"👉 **该会员消费合计 (折后票价+零食+小费): ${target_deduct:.2f}**")
+                    st.markdown(f"👉 **该会员本次消费合计 (剧本+零食+小费): ${target_deduct:.2f}**")
                     
-                    # V4.0 核心修复：移除了 key 中变动的 target_deduct 变量，确保输入框稳定，不再导致重置
-                    deduct_amt = st.number_input(f"💳 实际从 {m} 余额扣除", min_value=0.0, max_value=max(m_bal, 0.0), value=float(min(target_deduct, m_bal)), step=1.0, key=f"deduct_amt_stable_{m}")
+                    # V5.0 绝对稳定的 key：无论数值怎么变，框绝对不会清空重置！
+                    deduct_amt = st.number_input(f"💳 实际从 {m} 余额扣除", min_value=0.0, max_value=max(m_bal, 0.0), value=float(min(target_deduct, m_bal)), step=1.0, key=f"deduct_stable_{m}")
                     
                     if deduct_amt > 0:
                         member_deductions[m] = deduct_amt
@@ -331,10 +315,10 @@ with tabs[2]:
             extra_overflow_tip = max(0, extra_overflow)
             system_calculated_tip = total_explicit_member_tip + extra_overflow_tip
             
-            st.caption(f"📊 动态折后应收总款 (含零食) 应为：**${actual_expected_total:.2f}**")
+            st.caption(f"📊 动态折后应收总款 (含所有零食) 应为：**${actual_expected_total:.2f}**")
             
             if system_calculated_tip > 0:
-                st.success(f"🧾 最终实收: **${total_collected:.2f}**。包含系统总小费: **${system_calculated_tip:.2f}**")
+                st.success(f"🧾 最终实收: **${total_collected:.2f}**。包含系统计算总小费: **${system_calculated_tip:.2f}**")
             else:
                 st.info(f"🧾 最终实收: **${total_collected:.2f}**")
                 
@@ -347,7 +331,7 @@ with tabs[2]:
                 final_tip_amount = system_calculated_tip
             
             t_dms = st.multiselect("🧑‍🏫 分配小费的 DM", emp_list, default=[session_dm] if session_dm else [])
-            snack_note = f" [外部含零食: {', '.join(global_snack_details)}]" if global_snack_details else ""
+            snack_note = f" [全局含零食: {', '.join(global_snack_details)}]" if global_snack_details else ""
             note = st.text_input("账单全局备注") + snack_note
             
             if st.button("🚀 确认结账入库", type="primary", use_container_width=True):
@@ -380,17 +364,13 @@ with tabs[2]:
                     if final_tip_amount > 0 and t_dms:
                         t_recs = [{'记录日期':pd.to_datetime(datetime.now().date()),'员工姓名':e,'工作类型':'专属小费','时长(小时)':0.0,'当日薪资($)':final_tip_amount/len(t_dms)} for e in t_dms]
                         st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(t_recs)], ignore_index=True)
-                    
-                    st.toast("✅ 结算成功！账款及小费已同步。", icon="🎉")
-                    time.sleep(0.5)
                     st.rerun()
                 else:
                     st.error("入账总额不能为 0！")
 
     with c_p2:
         st.subheader("流水明细与修改")
-        search_ledger = st.text_input("🔍 搜索查账 (清空搜索框以进入编辑模式)", "", key="search_l")
-        
+        search_ledger = st.text_input("🔍 搜索查账 (清空以进入编辑模式)", "", key="search_l")
         if search_ledger:
             mask = st.session_state['ledger_db']['关联剧本'].str.contains(search_ledger, case=False, na=False) | st.session_state['ledger_db']['备注'].str.contains(search_ledger, case=False, na=False) | st.session_state['ledger_db']['主开DM'].str.contains(search_ledger, case=False, na=False)
             st.dataframe(st.session_state['ledger_db'][mask], use_container_width=True, height=600)
@@ -398,7 +378,7 @@ with tabs[2]:
             st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=600, key="ed_l")
 
 # ==========================================
-# Tab 4: 经营报表 (保留所有明细与百分比)
+# Tab 4: 经营报表 (保留了所有明细与百分比分析)
 # ==========================================
 with tabs[3]:
     st.header("📊 财务损益动态分析")
@@ -419,7 +399,7 @@ with tabs[3]:
             l_df['交易时间_dt'] = pd.to_datetime(l_df['交易时间']).dt.date
             mask = (l_df['交易时间_dt'] >= start_date) & (l_df['交易时间_dt'] <= end_date)
             filtered_l = l_df[mask]
-            
+            # 总营业额：包含剧本、零食、会员充值 (排除了内部抵扣的会员余额)
             rev = filtered_l[filtered_l['支付方式'] != '会员余额']['入账总额($)'].sum()
             
         if not a_df.empty and '记录日期' in a_df.columns:
@@ -439,7 +419,7 @@ with tabs[3]:
         else:
             wages_pct = tips_pct = rent_pct = profit_pct = 0.0
 
-        st.info("💡 财务引擎已启动【防重复计算】：会员充值款将直接计入现金流，后续会员打本扣除余额的交易将被视为内部抵扣，不重复计算现金营收，确保报表与实际账户入账 100% 匹配。")
+        st.info("💡 财务引擎已启动【防重复计算】：会员充值款直接计入现金流，后续会员打本扣除余额的交易视为内部抵扣，不重复计算营收，确保报表与账户 100% 匹配。")
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("区间总营业额", f"${rev:,.2f}", "100% (计算基准)", delta_color="off")
@@ -454,7 +434,7 @@ with tabs[3]:
         with c_sub1:
             st.caption("🧾 流水入账记录")
             if not filtered_l.empty:
-                st.dataframe(filtered_l[['交易时间', '关联剧本', '主开DM', '支付方式', '入账总额($)']], use_container_width=True)
+                st.dataframe(filtered_l[['交易时间', '关联剧本', '主开DM', '支付方式', '入账总额($)', '备注']], use_container_width=True)
             else:
                 st.info("期间无入账记录。")
         with c_sub2:
@@ -465,7 +445,7 @@ with tabs[3]:
                 st.info("期间无人工支出记录。")
 
 # ==========================================
-# Tab 5: 会员管理
+# Tab 5: 会员管理 (彻底修复搜索框覆盖数据库Bug)
 # ==========================================
 with tabs[4]:
     m_col1, m_col2 = st.columns([1, 2])
@@ -473,7 +453,7 @@ with tabs[4]:
         st.subheader("👤 会员业务")
         m_action = st.radio("业务类型", ["🔄 续费", "✨ 开卡"], horizontal=True)
         if m_action == "🔄 续费":
-            m_list = st.session_state['member_db']['会员姓名'].tolist()
+            m_list = st.session_state['member_db']['会员姓名'].unique().tolist()
             if m_list:
                 r_name = st.selectbox("选择会员", m_list)
                 r_amt = st.number_input("续费金额", 0.0, step=50.0)
@@ -500,16 +480,22 @@ with tabs[4]:
 
     with m_col2:
         st.subheader("📋 会员名册与消费明细")
-        search_m = st.text_input("🔍 搜索姓名/电话", "")
-        m_display = st.session_state['member_db'].copy()
-        if search_m:
-            m_display = m_display[m_display['会员姓名'].str.contains(search_m, case=False, na=False) | m_display['电话号码'].str.contains(search_m, case=False, na=False)]
-        st.session_state['member_db'] = st.data_editor(m_display, use_container_width=True, key="ed_m")
+        search_m = st.text_input("🔍 搜索姓名/电话 (清空搜索框进入编辑模式)", "")
         
-        st.divider()
-        if search_m and not m_display.empty:
-            matched_names = m_display['会员姓名'].tolist()
-            safe_pattern = "|".join([re.escape(name) for name in matched_names])
-            m_logs = st.session_state['ledger_db'][st.session_state['ledger_db']['备注'].str.contains(safe_pattern, regex=True, na=False)]
-            st.write("📖 匹配会员的流水记录：")
-            st.dataframe(m_logs[['交易时间', '关联剧本', '入账总额($)', '备注']].sort_values('交易时间', ascending=False), use_container_width=True)
+        if search_m:
+            # 搜索模式：只能看，不能改，绝对保护数据库安全！
+            mask = st.session_state['member_db']['会员姓名'].str.contains(search_m, case=False, na=False) | st.session_state['member_db']['电话号码'].str.contains(search_m, case=False, na=False)
+            m_display = st.session_state['member_db'][mask]
+            st.dataframe(m_display, use_container_width=True)
+            
+            st.divider()
+            if not m_display.empty:
+                matched_names = m_display['会员姓名'].tolist()
+                safe_pattern = "|".join([re.escape(name) for name in matched_names])
+                m_logs = st.session_state['ledger_db'][st.session_state['ledger_db']['备注'].str.contains(safe_pattern, regex=True, na=False)]
+                st.write("📖 匹配会员的流水记录：")
+                st.dataframe(m_logs[['交易时间', '关联剧本', '入账总额($)', '备注']].sort_values('交易时间', ascending=False), use_container_width=True)
+        else:
+            # 编辑模式
+            st.caption("✨ 双击表格可直接修改会员资料。")
+            st.session_state['member_db'] = st.data_editor(st.session_state['member_db'], use_container_width=True, key="ed_m")

@@ -111,7 +111,7 @@ with tab2:
                 st.dataframe(summary, use_container_width=True)
                 st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
 
-# --- Tab 3: 收银记账 (支持人民币自动换算美元) ---
+# --- Tab 3: 收银记账 ---
 with tab3:
     col_pay1, col_pay2 = st.columns([1, 1.2])
     
@@ -135,7 +135,6 @@ with tab3:
         st.divider()
         st.write("💳 **拆分支付输入** (未付渠道留空即可)")
         
-        # 1. 美元支付区
         st.caption("🟢 **美元渠道 (USD $)**")
         c1, c2 = st.columns(2)
         venmo_amt = c1.number_input("📱 Venmo ($)", min_value=0.0, step=1.0)
@@ -143,27 +142,24 @@ with tab3:
         transfer_amt = c1.number_input("🏦 银行转账 ($)", min_value=0.0, step=1.0)
         cash_amt = c2.number_input("💵 现金 ($)", min_value=0.0, step=1.0)
         
-        st.write("") # 留点空隙
+        st.write("")
         
-        # 2. 人民币支付区 (核心更新)
         st.caption("🔴 **人民币渠道 (RMB ¥) - 自动折算美金**")
         exchange_rate = st.number_input("当前汇率设置 (1 USD = ? RMB)", value=7.20, step=0.05, format="%.2f")
         c3, c4 = st.columns(2)
         alipay_rmb = c3.number_input("💙 支付宝 (¥)", min_value=0.0, step=10.0)
         wechat_rmb = c4.number_input("💚 微信 (¥)", min_value=0.0, step=10.0)
         
-        # 实时计算人民币换算出的美元
         alipay_usd = alipay_rmb / exchange_rate if exchange_rate > 0 else 0.0
         wechat_usd = wechat_rmb / exchange_rate if exchange_rate > 0 else 0.0
         
         if alipay_rmb > 0 or wechat_rmb > 0:
             st.caption(f"*(折算结果：支付宝约 ${alipay_usd:.2f}，微信约 ${wechat_usd:.2f})*")
 
-        # 汇总所有美元
         total_collected = venmo_amt + zelle_amt + transfer_amt + cash_amt + alipay_usd + wechat_usd
         
         st.divider()
-        st.write("✨ **财务对账与小费**")
+        st.write("✨ **财务对账与小费分配**")
         
         if expected_total > 0 and total_collected > expected_total:
             tip_amount = total_collected - expected_total
@@ -180,14 +176,17 @@ with tab3:
         if override_tip:
             tip_amount = st.number_input("手动输入小费($)", min_value=0.0, value=float(tip_amount))
             
+        # 核心更新：关联 DM 并自动分配小费
+        dm_list = st.session_state['employee_db']['员工姓名'].tolist()
+        tipped_dms = st.multiselect("🧑‍🏫 选择分配小费的 DM (将自动平分并记入薪资账单)", dm_list)
+            
         pay_note = st.text_input("备注 (如：张三等6人车)")
         
         if st.button("确认收账入库", type="primary"):
             if total_collected > 0:
+                # 1. 记录到 Tab 3 的流水账
                 def save_record(method, amt, rmb_original=None):
                     method_tip = amt * (tip_amount / total_collected) if total_collected > 0 else 0
-                    
-                    # 如果是人民币支付，自动在备注里加上原始人民币金额，方便查账
                     final_note = pay_note
                     if rmb_original:
                         final_note = f"{pay_note} [{method}收 ¥{rmb_original:.2f}]".strip()
@@ -202,16 +201,29 @@ with tab3:
                     })
                     st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], new_ledger], ignore_index=True)
                 
-                # 美元录入
                 if venmo_amt > 0: save_record("Venmo", venmo_amt)
                 if zelle_amt > 0: save_record("Zelle", zelle_amt)
                 if transfer_amt > 0: save_record("转账", transfer_amt)
                 if cash_amt > 0: save_record("现金", cash_amt)
-                # 人民币折算美元录入，并传入原始 RMB 记录
                 if alipay_usd > 0: save_record("支付宝", alipay_usd, alipay_rmb)
                 if wechat_usd > 0: save_record("微信", wechat_usd, wechat_rmb)
                 
-                st.success(f"✅ 账单已记录！共计 ${total_collected:.2f} (包含汇率折算) 已入库。")
+                # 2. 自动把小费记录到 Tab 2 的员工薪资表
+                if tip_amount > 0 and tipped_dms:
+                    tip_per_dm = tip_amount / len(tipped_dms)
+                    tip_records = []
+                    for dm in tipped_dms:
+                        tip_records.append({
+                            '记录日期': pd.to_datetime(datetime.now().date()), 
+                            '员工姓名': dm, 
+                            '工作类型': "专属小费", 
+                            '时长(小时)': 0.0, 
+                            '当日薪资($)': tip_per_dm
+                        })
+                    st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(tip_records)], ignore_index=True)
+                    st.success(f"✅ 账单已入库！💸 小费 ${tip_amount:.2f} 已自动平分给 {len(tipped_dms)} 位 DM，写入考勤系统。")
+                else:
+                    st.success(f"✅ 账单已记录！共计 ${total_collected:.2f} 已按渠道入库。")
             else:
                 st.error("入账总额不能为 0，请检查填写的金额。")
 

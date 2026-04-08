@@ -8,15 +8,22 @@ st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 # --- 数据初始化与向下兼容 ---
 if 'scripts_db' not in st.session_state:
     st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '主开DM', '日期'])
+    
 if 'employee_db' not in st.session_state:
     st.session_state['employee_db'] = pd.DataFrame(columns=['员工姓名', '时薪($)'])
+    
 if 'attendance_db' not in st.session_state:
     st.session_state['attendance_db'] = pd.DataFrame(columns=['记录日期', '员工姓名', '工作类型', '时长(小时)', '当日薪资($)'])
 else:
     if '打卡日期' in st.session_state['attendance_db'].columns:
         st.session_state['attendance_db'].rename(columns={'打卡日期': '记录日期'}, inplace=True)
+        
 if 'ledger_db' not in st.session_state:
-    st.session_state['ledger_db'] = pd.DataFrame(columns=['交易时间', '关联剧本', '支付方式', '入账总额($)', '其中小费($)', '备注'])
+    st.session_state['ledger_db'] = pd.DataFrame(columns=['交易时间', '关联剧本', '主开DM', '支付方式', '入账总额($)', '其中小费($)', '备注'])
+else:
+    # 向下兼容：给旧数据自动添加“主开DM”这一列
+    if '主开DM' not in st.session_state['ledger_db'].columns:
+        st.session_state['ledger_db'].insert(2, '主开DM', "")
 
 st.title("Y Square Studio 门店管理系统")
 tab1, tab2, tab3 = st.tabs(["📚 剧本列表管理", "⏰ 员工考勤与薪资", "💵 收银与流水记录"])
@@ -155,12 +162,15 @@ with tab3:
         st.subheader("录入新账单")
         script_options = st.session_state['scripts_db']['剧本名称'].unique().tolist()
         expected_total = 0.0
+        host_dm = ""
         
         if script_options:
             script_link = st.selectbox("🔍 搜索剧本场次", script_options)
             matched_script = st.session_state['scripts_db'][st.session_state['scripts_db']['剧本名称'] == script_link].iloc[-1]
             expected_total = float(matched_script['单人价格($)']) * int(matched_script['人数配置'])
-            st.info(f"💡 **应收票款**：${expected_total:.2f}")
+            host_dm = matched_script['主开DM']  # 自动提取这车的主开DM
+            
+            st.info(f"💡 **应收票款**：${expected_total:.2f} (主开DM: {host_dm})")
         else:
             script_link = st.text_input("关联剧本名")
         
@@ -205,7 +215,15 @@ with tab3:
                 def save_record(method, amt, rmb_original=None):
                     method_tip = amt * (tip_amount / total_collected) if total_collected > 0 else 0
                     final_note = f"{pay_note} [{method}收 ¥{rmb_original:.2f}]".strip() if rmb_original else pay_note
-                    st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], pd.DataFrame({'交易时间': [datetime.now().strftime("%Y-%m-%d %H:%M")], '关联剧本': [script_link], '支付方式': [method], '入账总额($)': [amt], '其中小费($)': [method_tip], '备注': [final_note]})], ignore_index=True)
+                    st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], pd.DataFrame({
+                        '交易时间': [datetime.now().strftime("%Y-%m-%d %H:%M")], 
+                        '关联剧本': [script_link], 
+                        '主开DM': [host_dm], # 保存主开DM到流水库
+                        '支付方式': [method], 
+                        '入账总额($)': [amt], 
+                        '其中小费($)': [method_tip], 
+                        '备注': [final_note]
+                    })], ignore_index=True)
                 
                 if venmo_amt > 0: save_record("Venmo", venmo_amt)
                 if zelle_amt > 0: save_record("Zelle", zelle_amt)
@@ -224,10 +242,12 @@ with tab3:
 
     with col_pay2:
         st.subheader("流水明细与修改")
-        search_ledger = st.text_input("🔍 搜索查账 (清空搜索框以进入编辑模式)", "", key="search_l")
+        search_ledger = st.text_input("🔍 搜索查账 (可搜剧本名或DM名)", "", key="search_l")
         
         if search_ledger:
-            mask = st.session_state['ledger_db']['关联剧本'].str.contains(search_ledger, case=False, na=False) | st.session_state['ledger_db']['备注'].str.contains(search_ledger, case=False, na=False)
+            mask = st.session_state['ledger_db']['关联剧本'].str.contains(search_ledger, case=False, na=False) | \
+                   st.session_state['ledger_db']['备注'].str.contains(search_ledger, case=False, na=False) | \
+                   st.session_state['ledger_db']['主开DM'].str.contains(search_ledger, case=False, na=False)
             st.dataframe(st.session_state['ledger_db'][mask], use_container_width=True, height=450)
             st.info("💡 提示：搜索状态下不可修改。清空上方的搜索框，即可直接修改或删除流水。")
         else:

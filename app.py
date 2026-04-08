@@ -127,7 +127,7 @@ with tabs[1]:
         st.session_state['attendance_db'] = st.data_editor(st.session_state['attendance_db'], num_rows="dynamic", use_container_width=True, key="ed_att")
 
 # ==========================================
-# Tab 3: 收银台
+# Tab 3: 收银台 (深度隔离全局零食与会员零食)
 # ==========================================
 with tabs[2]:
     st.subheader("📈 门店总营业额监控")
@@ -146,6 +146,7 @@ with tabs[2]:
         st.subheader("新建收银账单")
         s_opts = st.session_state['scripts_db']['剧本名称'].unique().tolist()
         emp_list = st.session_state['employee_db']['员工姓名'].tolist()
+        inventory_list = st.session_state['inventory_db']['项目名称'].tolist()
         
         if not s_opts:
             st.warning("请先在 Tab 1 录入剧本！")
@@ -158,24 +159,22 @@ with tabs[2]:
             session_dm = st.selectbox("🧑‍🏫 本场带本 DM (记录流水用)", emp_list) if emp_list else ""
             
             st.divider()
-            st.write("🍿 **零食/饮料消费**")
-            inventory_list = st.session_state['inventory_db']['项目名称'].tolist()
-            selected_items = st.multiselect("🔍 选择零食/饮料 (支持多选)", inventory_list)
+            # --- 外部零食（不计入会员扣款的零食） ---
+            st.write("🍿 **非会员/整车 零食与饮料 (由外部渠道支付)**")
+            selected_global_items = st.multiselect("🔍 选择零食/饮料 (支持多选)", inventory_list)
             
-            snack_total = 0.0
-            snack_details = []
-            if selected_items:
-                for item in selected_items:
+            global_snack_total = 0.0
+            global_snack_details = []
+            if selected_global_items:
+                cols_g = st.columns(len(selected_global_items))
+                for i, item in enumerate(selected_global_items):
                     item_price = st.session_state['inventory_db'][st.session_state['inventory_db']['项目名称'] == item]['单价($)'].values[0]
-                    qty = st.number_input(f"数量: {item} (${item_price}/份)", min_value=1, value=1, key=f"qty_{item}")
-                    snack_total += item_price * qty
-                    snack_details.append(f"{item}x{qty}")
-            
-            actual_expected_total_base = base_price + snack_total
-            st.info(f"💡 **本单计算**：剧本 ${base_price:.2f} + 零食 ${snack_total:.2f} = 总计应收 **${actual_expected_total_base:.2f}**")
+                    qty = cols_g[i % len(cols_g)].number_input(f"{item} (${item_price})", min_value=1, value=1, key=f"gqty_{item}")
+                    global_snack_total += item_price * qty
+                    global_snack_details.append(f"{item}x{qty}")
 
             st.divider()
-            st.write("💰 **外部支付明细录入**")
+            st.write("💰 **外部拆分支付输入 (未付渠道留空)**")
             col_u1, col_u2 = st.columns(2)
             v_usd = col_u1.number_input("📱 Venmo ($)", 0.0)
             z_usd = col_u2.number_input("💸 Zelle ($)", 0.0)
@@ -189,25 +188,43 @@ with tabs[2]:
             
             external_total = v_usd + z_usd + c_usd + tr_usd + (ali_rmb/ex_rate if ex_rate > 0 else 0) + (wx_rmb/ex_rate if ex_rate > 0 else 0)
 
-            st.write("💎 **会员扣款 (多选)**")
+            st.divider()
+            st.write("💎 **选择会员消费 (独立计费与抵扣)**")
             m_list = st.session_state['member_db']['会员姓名'].tolist()
             selected_members = st.multiselect("🔍 本车有哪些会员？", m_list)
             
             member_deductions = {}
+            member_snack_notes = {}
             member_total = 0.0
             expected_member_revenue = 0.0 
             total_explicit_member_tip = 0.0 
             
             if selected_members:
-                for m in selected_members:
+                for idx, m in enumerate(selected_members):
+                    st.markdown(f"**👤 会员：{m}**")
                     m_info = st.session_state['member_db'][st.session_state['member_db']['会员姓名']==m].iloc[-1]
                     m_discount = float(m_info['折扣率'])
                     m_bal = float(m_info['当前余额($)'])
                     m_discounted_price = single_price * m_discount
-                    expected_member_revenue += m_discounted_price
                     
-                    st.caption(f"会员 {m} | 折后票价: ${m_discounted_price:.2f} | 余额: ${m_bal:.2f}")
+                    st.caption(f"当前余额: ${m_bal:.2f} | 折后票价: ${m_discounted_price:.2f}")
                     
+                    # 会员专属零食
+                    m_snack_items = st.multiselect(f"🍿 {m} 独立购买的零食/饮料", inventory_list, key=f"msnack_sel_{m}")
+                    m_snack_total = 0.0
+                    m_snack_details = []
+                    if m_snack_items:
+                        cols_sq = st.columns(len(m_snack_items))
+                        for i, item in enumerate(m_snack_items):
+                            item_price = st.session_state['inventory_db'][st.session_state['inventory_db']['项目名称'] == item]['单价($)'].values[0]
+                            qty = cols_sq[i % len(cols_sq)].number_input(f"{item} (${item_price})", min_value=1, value=1, key=f"mqty_{m}_{item}")
+                            m_snack_total += item_price * qty
+                            m_snack_details.append(f"{item}x{qty}")
+                    
+                    expected_member_revenue += (m_discounted_price + m_snack_total)
+                    member_snack_notes[m] = f" [含零食: {', '.join(m_snack_details)}]" if m_snack_details else ""
+                    
+                    # 会员小费
                     col_t1, col_t2 = st.columns(2)
                     with col_t1: tip_mode = st.radio("添加小费", ["无", "固定金额 ($)", "百分比 (%)"], horizontal=True, key=f"tm_{m}")
                     with col_t2:
@@ -215,21 +232,25 @@ with tabs[2]:
                         if tip_mode == "固定金额 ($)": m_tip = st.number_input("金额", 0.0, key=f"tv_{m}")
                         elif tip_mode == "百分比 (%)": m_tip = m_discounted_price * (st.slider("比例", 0, 50, 15, 5, key=f"tp_{m}")/100)
                     
-                    target_deduct = m_discounted_price + m_tip
                     total_explicit_member_tip += m_tip
-                    st.markdown(f"👉 **该会员消费合计: ${target_deduct:.2f}**")
-                    deduct_amt = st.number_input(f"实际从 {m} 扣除", 0.0, m_bal, min(target_deduct, m_bal), key=f"dd_{m}_{target_deduct}")
+                    target_deduct = m_discounted_price + m_snack_total + m_tip
+                    
+                    st.markdown(f"👉 **该会员消费合计 (折后票价+零食+小费): ${target_deduct:.2f}**")
+                    deduct_amt = st.number_input(f"💳 实际从 {m} 余额扣除", min_value=0.0, max_value=max(m_bal, 0.0), value=float(min(target_deduct, m_bal)), step=1.0, key=f"dd_{m}_{target_deduct}")
+                    
                     if deduct_amt > 0:
                         member_deductions[m] = deduct_amt
                         member_total += deduct_amt
+                    
+                    if idx < len(selected_members) - 1:
+                        st.write("---")
 
             st.divider()
             st.write("✨ **财务对账与结算**")
             
             external_pax = max(0, pax - len(selected_members))
-            expected_external_revenue = external_pax * single_price
-            # 最终的应收 = 外部人员剧本原价 + 会员折后价 + 零食钱
-            actual_expected_total = expected_external_revenue + expected_member_revenue + snack_total
+            expected_external_revenue = (external_pax * single_price) + global_snack_total
+            actual_expected_total = expected_external_revenue + expected_member_revenue
             total_collected = external_total + member_total
             
             extra_overflow = total_collected - actual_expected_total - total_explicit_member_tip
@@ -252,20 +273,28 @@ with tabs[2]:
                 final_tip_amount = system_calculated_tip
             
             t_dms = st.multiselect("🧑‍🏫 分配小费的 DM", emp_list, default=[session_dm] if session_dm else [])
-            snack_note = f" [含零食: {', '.join(snack_details)}]" if snack_details else ""
-            note = st.text_input("账单备注") + snack_note
+            note = st.text_input("账单全局备注")
             
             if st.button("🚀 确认结账入库", type="primary", use_container_width=True):
                 if total_collected > 0:
+                    if final_tip_amount > 0 and not t_dms:
+                        st.error("⚠️ 产生了小费，请在上方选择【分配小费的 DM】！")
+                        st.stop()
+                    
+                    # 1. 记入会员账单
                     for m, amt in member_deductions.items():
                         st.session_state['member_db'].loc[st.session_state['member_db']['会员姓名']==m, '当前余额($)'] -= amt
                         m_tip = amt * (final_tip_amount / total_collected) if total_collected > 0 else 0
-                        m_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[session_dm],'支付方式':['会员余额'],'入账总额($)':[amt],'其中小费($)':[m_tip],'备注':[f"会员 [{m}] 扣款 | {note}"]})
+                        m_s_note = member_snack_notes.get(m, "")
+                        f_m_note = f"会员 [{m}] 扣款{m_s_note} | {note}".strip() if note else f"会员 [{m}] 扣款{m_s_note}".strip()
+                        m_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[session_dm],'支付方式':['会员余额'],'入账总额($)':[amt],'其中小费($)':[m_tip],'备注':[f_m_note]})
                         st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], m_log], ignore_index=True)
 
+                    # 2. 记入外部流水账单
                     def save_ext(method, amt, r=None):
                         method_tip = amt * (final_tip_amount / total_collected) if total_collected > 0 else 0
-                        f_note = f"{note} [{method}收 ¥{r:.2f}]".strip() if r else note
+                        g_s_note = f" [外部含零食: {', '.join(global_snack_details)}]" if global_snack_details else ""
+                        f_note = f"{note}{g_s_note} [{method}收 ¥{r:.2f}]".strip() if r else f"{note}{g_s_note}".strip()
                         ext_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[session_dm],'支付方式':[method],'入账总额($)':[amt],'其中小费($)':[method_tip],'备注':[f_note]})
                         st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], ext_log], ignore_index=True)
                         
@@ -276,6 +305,7 @@ with tabs[2]:
                     if ali_rmb > 0: save_ext("支付宝", ali_rmb/ex_rate, ali_rmb)
                     if wx_rmb > 0: save_ext("微信", wx_rmb/ex_rate, wx_rmb)
                     
+                    # 3. 记入考勤表小费
                     if final_tip_amount > 0 and t_dms:
                         t_recs = [{'记录日期':pd.to_datetime(datetime.now().date()),'员工姓名':e,'工作类型':'专属小费','时长(小时)':0.0,'当日薪资($)':final_tip_amount/len(t_dms)} for e in t_dms]
                         st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(t_recs)], ignore_index=True)
@@ -294,7 +324,7 @@ with tabs[2]:
             st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=600, key="ed_l")
 
 # ==========================================
-# Tab 4: 经营报表 (全面恢复明细与百分比)
+# Tab 4: 经营报表
 # ==========================================
 with tabs[3]:
     st.header("📊 财务损益动态分析")
@@ -328,7 +358,6 @@ with tabs[3]:
 
         profit = rev - wages - tips - rent
         
-        # 计算各种费用占总营业额的百分比
         if rev > 0:
             wages_pct = (wages / rev) * 100
             tips_pct = (tips / rev) * 100
@@ -346,7 +375,6 @@ with tabs[3]:
         m4.metric("房租成本", f"${rent:,.2f}", f"占营业额: {rent_pct:.1f}%", delta_color="inverse")
         m5.metric("净利润", f"${profit:,.2f}", f"净利润率: {profit_pct:.1f}%")
         
-        # 恢复下方的明细表格
         st.divider()
         st.write("📝 **期间明细参考**")
         c_sub1, c_sub2 = st.columns(2)
@@ -364,7 +392,7 @@ with tabs[3]:
                 st.info("期间无人工支出记录。")
 
 # ==========================================
-# Tab 5: 会员管理 (智能模糊搜索)
+# Tab 5: 会员管理
 # ==========================================
 with tabs[4]:
     m_col1, m_col2 = st.columns([1, 2])

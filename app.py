@@ -89,7 +89,7 @@ with tabs[1]:
         st.session_state['attendance_db'] = st.data_editor(st.session_state['attendance_db'], num_rows="dynamic", use_container_width=True, key="ed_att")
 
 # ==========================================
-# Tab 3: 收银台 (小费逻辑终极修复版)
+# Tab 3: 收银台 (修复会员小费强制计算逻辑)
 # ==========================================
 with tabs[2]:
     c_p1, c_p2 = st.columns([1, 1.4])
@@ -111,7 +111,7 @@ with tabs[2]:
             st.divider()
 
             # --- 1. 常规外部支付通道 ---
-            st.write("💰 **外部支付明细 (未付渠道留空)**")
+            st.write("💰 **外部拆分支付输入 (未付渠道留空)**")
             col_u1, col_u2 = st.columns(2)
             v_usd = col_u1.number_input("📱 Venmo ($)", min_value=0.0, step=1.0)
             z_usd = col_u2.number_input("💸 Zelle ($)", min_value=0.0, step=1.0)
@@ -134,7 +134,7 @@ with tabs[2]:
             member_deductions = {}
             member_total = 0.0
             expected_member_revenue = 0.0 
-            total_explicit_member_tip = 0.0 # 核心修复：单独存储会员给的固定小费
+            total_explicit_member_tip = 0.0 
             
             if selected_members:
                 for idx, m in enumerate(selected_members):
@@ -145,7 +145,7 @@ with tabs[2]:
                     discounted_single = single_price * discount
                     expected_member_revenue += discounted_single
                     
-                    st.caption(f"当前余额: ${balance:.2f} | 专属折扣: {discount*100:.0f}折 | **折后应付单价: ${discounted_single:.2f}**")
+                    st.caption(f"当前余额: ${balance:.2f} | 专属折扣: {discount*100:.0f}折 | **折后应付票价: ${discounted_single:.2f}**")
                     
                     col_t1, col_t2 = st.columns(2)
                     with col_t1:
@@ -159,12 +159,16 @@ with tabs[2]:
                             m_tip = discounted_single * (m_pct / 100)
                             st.write(f"小费计算得: ${m_tip:.2f}")
                             
-                    total_explicit_member_tip += m_tip # 累加所有会员的明确小费
+                    total_explicit_member_tip += m_tip
                     target_deduct = discounted_single + m_tip
                     
+                    # 核心修复：明确显示总计金额
+                    st.markdown(f"👉 **该会员本次消费总计 (票价 + 小费): ${target_deduct:.2f}**")
+                    
+                    # 核心修复：强制刷新扣款框的值！通过把 target_deduct 放入 key 中，一旦金额改变，输入框会瞬间重置为新的正确计算值。
                     deduct_amt = st.number_input(
                         f"💳 实际从 {m} 余额扣除", 
-                        min_value=0.0, max_value=max(balance, 0.0), value=float(min(target_deduct, balance)), step=1.0, key=f"deduct_{m}"
+                        min_value=0.0, max_value=max(balance, 0.0), value=float(min(target_deduct, balance)), step=1.0, key=f"deduct_{m}_{target_deduct}"
                     )
                     
                     if deduct_amt > 0:
@@ -184,7 +188,6 @@ with tabs[2]:
             
             total_collected = external_total + member_total
             
-            # 核心修复算法：总小费 = 会员明确给的小费 + 外部溢出的小费
             extra_overflow = total_collected - actual_expected_total - total_explicit_member_tip
             extra_overflow_tip = max(0, extra_overflow)
             system_calculated_tip = total_explicit_member_tip + extra_overflow_tip
@@ -213,14 +216,13 @@ with tabs[2]:
                         st.error("⚠️ 产生了小费，请在上方选择【分配小费的 DM】！")
                         st.stop()
                     
-                    # 4.1 扣除会员余额并记入流水
                     for m, amt in member_deductions.items():
                         st.session_state['member_db'].loc[st.session_state['member_db']['会员姓名']==m, '当前余额($)'] -= amt
+                        # 会员流水中，小费按比例分配，确保报表对账一致
                         m_tip = amt * (final_tip_amount / total_collected) if total_collected > 0 else 0
                         m_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[h_dm],'支付方式':['会员余额'],'入账总额($)':[amt],'其中小费($)':[m_tip],'备注':[f"会员 [{m}] 扣款 | {note}"]})
                         st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], m_log], ignore_index=True)
 
-                    # 4.2 记录外部支付流水
                     def save_ext(method, amt, r=None):
                         method_tip = amt * (final_tip_amount / total_collected) if total_collected > 0 else 0
                         f_note = f"{note} [{method}收 ¥{r:.2f}]".strip() if r else note
@@ -234,7 +236,6 @@ with tabs[2]:
                     if ali_rmb > 0: save_ext("支付宝", ali_rmb/ex_rate, ali_rmb)
                     if wx_rmb > 0: save_ext("微信", wx_rmb/ex_rate, wx_rmb)
                     
-                    # 4.3 发送 DM 小费到考勤表
                     if final_tip_amount > 0 and t_dms:
                         t_recs = [{'记录日期':pd.to_datetime(datetime.now().date()),'员工姓名':e,'工作类型':'专属小费','时长(小时)':0.0,'当日薪资($)':final_tip_amount/len(t_dms)} for e in t_dms]
                         st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(t_recs)], ignore_index=True)

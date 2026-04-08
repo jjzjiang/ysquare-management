@@ -24,7 +24,7 @@ st.title("Y Square Studio 门店管理系统")
 
 tab1, tab2, tab3 = st.tabs(["📚 剧本列表管理", "⏰ 员工考勤与薪资", "💵 收银与流水记录"])
 
-# --- Tab 1: 剧本管理 (关联 Tab 2) ---
+# --- Tab 1: 剧本管理 ---
 with tab1:
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -34,7 +34,6 @@ with tab1:
             player_count = st.number_input("人数配置 (例如: 6)", min_value=1, step=1, value=6)
             price = st.number_input("单人价格 ($)", min_value=0.0, step=1.0, value=30.0)
             
-            # 核心升级 1：主开 DM 下拉菜单自动关联 Tab 2 的员工名单
             employee_list = st.session_state['employee_db']['员工姓名'].tolist()
             if not employee_list:
                 dm_name = st.text_input("主开 DM (⚠️ 请先去 Tab 2 录入员工名单)")
@@ -112,14 +111,13 @@ with tab2:
                 st.dataframe(summary, use_container_width=True)
                 st.download_button("下载本月工资单 (CSV)", summary.to_csv(index=False).encode('utf-8-sig'), f"salary_{target_month}.csv", "text/csv")
 
-# --- Tab 3: 收银记账 (关联应收价格 & 智能小费) ---
+# --- Tab 3: 收银记账 (支持人民币自动换算美元) ---
 with tab3:
     col_pay1, col_pay2 = st.columns([1, 1.2])
     
     with col_pay1:
         st.subheader("录入新账单")
         
-        # 核心升级 2：自带搜索功能的下拉菜单 + 自动抓取价格
         script_options = st.session_state['scripts_db']['剧本名称'].unique().tolist()
         expected_total = 0.0
         
@@ -127,74 +125,95 @@ with tab3:
             st.warning("提示：请先在 Tab 1 录入剧本！")
             script_link = st.text_input("手动输入关联剧本名")
         else:
-            # selectbox 原生支持键盘打字搜索
-            script_link = st.selectbox("🔍 搜索/选择剧本场次 (点击后直接打字搜索)", script_options)
-            
-            # 从 Tab 1 的数据库中找到对应的剧本，计算应收总价
+            script_link = st.selectbox("🔍 搜索/选择剧本场次", script_options)
             matched_script = st.session_state['scripts_db'][st.session_state['scripts_db']['剧本名称'] == script_link].iloc[-1]
             price_per_pax = float(matched_script['单人价格($)'])
             pax = int(matched_script['人数配置'])
             expected_total = price_per_pax * pax
-            
-            st.info(f"💡 **系统联动**：此车单价 **${price_per_pax:.2f}** × **{pax}** 人 = 标准应收票款 **${expected_total:.2f}**")
+            st.info(f"💡 **本车应收标准票款**：${expected_total:.2f}")
         
         st.divider()
-        st.write("💳 **拆分支付输入** (请输入实收金额，未付渠道留空为0)")
+        st.write("💳 **拆分支付输入** (未付渠道留空即可)")
         
+        # 1. 美元支付区
+        st.caption("🟢 **美元渠道 (USD $)**")
         c1, c2 = st.columns(2)
-        venmo_amt = c1.number_input("📱 Venmo/Zelle ($)", min_value=0.0, step=1.0)
+        venmo_amt = c1.number_input("📱 Venmo ($)", min_value=0.0, step=1.0)
+        zelle_amt = c2.number_input("💸 Zelle ($)", min_value=0.0, step=1.0)
+        transfer_amt = c1.number_input("🏦 银行转账 ($)", min_value=0.0, step=1.0)
         cash_amt = c2.number_input("💵 现金 ($)", min_value=0.0, step=1.0)
-        card_amt = c1.number_input("💳 刷卡 ($)", min_value=0.0, step=1.0)
-        alipay_amt = c2.number_input("💙 支付宝 ($)", min_value=0.0, step=1.0)
         
-        # 实时计算实收总额
-        total_collected = venmo_amt + cash_amt + card_amt + alipay_amt
+        st.write("") # 留点空隙
+        
+        # 2. 人民币支付区 (核心更新)
+        st.caption("🔴 **人民币渠道 (RMB ¥) - 自动折算美金**")
+        exchange_rate = st.number_input("当前汇率设置 (1 USD = ? RMB)", value=7.20, step=0.05, format="%.2f")
+        c3, c4 = st.columns(2)
+        alipay_rmb = c3.number_input("💙 支付宝 (¥)", min_value=0.0, step=10.0)
+        wechat_rmb = c4.number_input("💚 微信 (¥)", min_value=0.0, step=10.0)
+        
+        # 实时计算人民币换算出的美元
+        alipay_usd = alipay_rmb / exchange_rate if exchange_rate > 0 else 0.0
+        wechat_usd = wechat_rmb / exchange_rate if exchange_rate > 0 else 0.0
+        
+        if alipay_rmb > 0 or wechat_rmb > 0:
+            st.caption(f"*(折算结果：支付宝约 ${alipay_usd:.2f}，微信约 ${wechat_usd:.2f})*")
+
+        # 汇总所有美元
+        total_collected = venmo_amt + zelle_amt + transfer_amt + cash_amt + alipay_usd + wechat_usd
         
         st.divider()
         st.write("✨ **财务对账与小费**")
         
-        # 核心升级 3：智能小费计算 (实收 - 应收)
         if expected_total > 0 and total_collected > expected_total:
             tip_amount = total_collected - expected_total
-            st.success(f"🧾 **完美账单**：实收 **${total_collected:.2f}**。系统自动将溢出的 **${tip_amount:.2f}** 记为小费！")
+            st.success(f"🧾 实收 **${total_collected:.2f}**。系统自动将溢出的 **${tip_amount:.2f}** 记为小费！")
         elif expected_total > 0 and 0 < total_collected < expected_total:
             tip_amount = 0.0
-            st.warning(f"⚠️ **提醒**：实收 **${total_collected:.2f}**，低于应收票款，还差 **${(expected_total - total_collected):.2f}**。 (如为打折请忽略)")
+            st.warning(f"⚠️ 实收 **${total_collected:.2f}**，低于应收票款，差额 **${(expected_total - total_collected):.2f}**。")
         else:
             tip_amount = 0.0
             if total_collected > 0:
                 st.success(f"🧾 实收 **${total_collected:.2f}**，金额与标准票款匹配。")
                 
-        # 允许手动覆写小费 (应对一些打折但又单独给了小费的复杂情况)
-        override_tip = st.checkbox("手动修改小费金额 (如果有特殊情况)")
+        override_tip = st.checkbox("手动修改小费金额")
         if override_tip:
             tip_amount = st.number_input("手动输入小费($)", min_value=0.0, value=float(tip_amount))
             
-        pay_note = st.text_input("备注 (如：张三等6人车，用了9折券)")
+        pay_note = st.text_input("备注 (如：张三等6人车)")
         
         if st.button("确认收账入库", type="primary"):
             if total_collected > 0:
-                def save_record(method, amt):
-                    # 将小费按金额比例分摊到对应的支付方式流水中
+                def save_record(method, amt, rmb_original=None):
                     method_tip = amt * (tip_amount / total_collected) if total_collected > 0 else 0
+                    
+                    # 如果是人民币支付，自动在备注里加上原始人民币金额，方便查账
+                    final_note = pay_note
+                    if rmb_original:
+                        final_note = f"{pay_note} [{method}收 ¥{rmb_original:.2f}]".strip()
+                        
                     new_ledger = pd.DataFrame({
                         '交易时间': [datetime.now().strftime("%Y-%m-%d %H:%M")],
                         '关联剧本': [script_link],
                         '支付方式': [method],
                         '入账总额($)': [amt],
                         '其中小费($)': [method_tip],
-                        '备注': [pay_note]
+                        '备注': [final_note]
                     })
                     st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], new_ledger], ignore_index=True)
                 
-                if venmo_amt > 0: save_record("Venmo/Zelle", venmo_amt)
+                # 美元录入
+                if venmo_amt > 0: save_record("Venmo", venmo_amt)
+                if zelle_amt > 0: save_record("Zelle", zelle_amt)
+                if transfer_amt > 0: save_record("转账", transfer_amt)
                 if cash_amt > 0: save_record("现金", cash_amt)
-                if card_amt > 0: save_record("刷卡", card_amt)
-                if alipay_amt > 0: save_record("支付宝", alipay_amt)
+                # 人民币折算美元录入，并传入原始 RMB 记录
+                if alipay_usd > 0: save_record("支付宝", alipay_usd, alipay_rmb)
+                if wechat_usd > 0: save_record("微信", wechat_usd, wechat_rmb)
                 
-                st.success(f"✅ 账单已记录！共计 ${total_collected:.2f} 已按渠道拆分入库。")
+                st.success(f"✅ 账单已记录！共计 ${total_collected:.2f} (包含汇率折算) 已入库。")
             else:
-                st.error("入账总额不能为 0，请检查上方填写的金额。")
+                st.error("入账总额不能为 0，请检查填写的金额。")
 
     with col_pay2:
         st.subheader("流水记录与多维统计")
@@ -211,7 +230,7 @@ with tab3:
             st.dataframe(display_ledger, use_container_width=True)
             
             st.divider()
-            st.write("📈 **财务维度汇总**")
+            st.write("📈 **财务维度汇总 (全折算为 USD)**")
             
             method_summary = display_ledger.groupby('支付方式').agg(
                 渠道总入账=('入账总额($)', 'sum'),
@@ -223,7 +242,7 @@ with tab3:
             pure_revenue = total_revenue - total_tips
             
             m1, m2, m3 = st.columns(3)
-            m1.metric("💰 门店总入账", f"${total_revenue:,.2f}")
+            m1.metric("💰 门店总入账 ($)", f"${total_revenue:,.2f}")
             m2.metric("📊 剥离小费后净收", f"${pure_revenue:,.2f}")
             m3.metric("✨ 累计沉淀小费", f"${total_tips:,.2f}")
             

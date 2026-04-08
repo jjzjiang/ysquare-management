@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import time
-import re  # 核心修复：用于安全处理搜索匹配
+import re
 
 st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 
@@ -10,7 +10,12 @@ st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 # 0. 核心数据初始化与强健兼容逻辑
 # ==========================================
 if 'scripts_db' not in st.session_state:
-    st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '主开DM', '日期'])
+    st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '日期'])
+else:
+    # 向下兼容：自动清除旧数据中的“主开DM”列
+    if '主开DM' in st.session_state['scripts_db'].columns:
+        st.session_state['scripts_db'] = st.session_state['scripts_db'].drop(columns=['主开DM'])
+        
 if 'employee_db' not in st.session_state:
     st.session_state['employee_db'] = pd.DataFrame(columns=['员工姓名', '时薪($)'])
     
@@ -35,7 +40,7 @@ st.title("Y Square Studio 门店管理系统")
 tabs = st.tabs(["📚 剧本列表", "⏰ 员工考勤", "💵 收银台", "📊 财务报表", "💎 会员管理"])
 
 # ==========================================
-# Tab 1: 剧本列表管理
+# Tab 1: 剧本列表管理 (移除主开DM绑定)
 # ==========================================
 with tabs[0]:
     col1, col2 = st.columns([1, 2.5])
@@ -45,13 +50,16 @@ with tabs[0]:
             s_name = st.text_input("剧本名称")
             s_pax = st.number_input("人数", min_value=1, value=6)
             s_price = st.number_input("单人原价 ($)", min_value=0.0, value=30.0)
-            emp_list = st.session_state['employee_db']['员工姓名'].tolist()
-            s_dm = st.selectbox("主开 DM", emp_list) if emp_list else st.text_input("主开 DM")
             s_date = st.date_input("首开日期")
             if st.form_submit_button("确认录入"):
-                new_s = pd.DataFrame({'剧本名称':[s_name],'人数配置':[s_pax],'单人价格($)':[s_price],'主开DM':[s_dm],'日期':[s_date]})
-                st.session_state['scripts_db'] = pd.concat([st.session_state['scripts_db'], new_s], ignore_index=True)
-                st.rerun()
+                if s_name:
+                    new_s = pd.DataFrame({'剧本名称':[s_name],'人数配置':[s_pax],'单人价格($)':[s_price],'日期':[s_date]})
+                    st.session_state['scripts_db'] = pd.concat([st.session_state['scripts_db'], new_s], ignore_index=True)
+                    st.toast("剧本已录入！", icon="✅")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error("请输入剧本名称")
     with col2:
         st.subheader("剧本库明细 (关联流水数据)")
         display_db = st.session_state['scripts_db'].copy()
@@ -62,12 +70,12 @@ with tabs[0]:
         else:
             display_db['累计开本(场)'] = 0
             
-        cols = ['剧本名称', '累计开本(场)', '人数配置', '单人价格($)', '主开DM', '日期']
+        cols = ['剧本名称', '累计开本(场)', '人数配置', '单人价格($)', '日期']
         display_db = display_db[cols]
         
-        search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "", key="search_s")
+        search_script = st.text_input("🔍 搜索剧本名称", "", key="search_s")
         if search_script:
-            mask = display_db['剧本名称'].str.contains(search_script, case=False, na=False) | display_db['主开DM'].str.contains(search_script, case=False, na=False)
+            mask = display_db['剧本名称'].str.contains(search_script, case=False, na=False)
             st.dataframe(display_db[mask], use_container_width=True)
             st.info("💡 清空搜索框即可进入修改模式。")
         else:
@@ -119,7 +127,7 @@ with tabs[1]:
         st.session_state['attendance_db'] = st.data_editor(st.session_state['attendance_db'], num_rows="dynamic", use_container_width=True, key="ed_att")
 
 # ==========================================
-# Tab 3: 收银台
+# Tab 3: 收银台 (新增：结账时选择带本DM)
 # ==========================================
 with tabs[2]:
     st.subheader("📈 门店现金流监控大盘")
@@ -131,7 +139,7 @@ with tabs[2]:
         net_cash = actual_cash_in - total_tips
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("💰 门店实际现金流入 (含充值)", f"${actual_cash_in:,.2f}")
+        m1.metric("💰 门店总营业额 (含充值)", f"${actual_cash_in:,.2f}")
         m2.metric("📊 剥离小费后净现金", f"${net_cash:,.2f}")
         m3.metric("✨ 待发小费池", f"${total_tips:,.2f}")
     else:
@@ -143,6 +151,7 @@ with tabs[2]:
     with c_p1:
         st.subheader("新建收银账单")
         s_opts = st.session_state['scripts_db']['剧本名称'].unique().tolist()
+        emp_list = st.session_state['employee_db']['员工姓名'].tolist()
         
         if not s_opts:
             st.warning("请先在 Tab 1 录入剧本！")
@@ -152,7 +161,9 @@ with tabs[2]:
             single_price = float(s_data['单人价格($)'])
             pax = int(s_data['人数配置'])
             base_price = single_price * pax
-            h_dm = s_data['主开DM']
+            
+            # 在收银台动态选择DM
+            session_dm = st.selectbox("🎯 本场带本 DM (记录流水用)", emp_list) if emp_list else ""
             
             st.info(f"💡 **剧本标准价**：单人 ${single_price:.2f} × {pax}人 = 满编标准总价 **${base_price:.2f}**")
             st.divider()
@@ -245,7 +256,7 @@ with tabs[2]:
             else:
                 final_tip_amount = system_calculated_tip
                 
-            t_dms = st.multiselect("🧑‍🏫 选择分配小费的 DM", emp_list, default=[h_dm] if h_dm in emp_list else [])
+            t_dms = st.multiselect("🧑‍🏫 选择分配小费的 DM", emp_list, default=[session_dm] if session_dm else [])
             note = st.text_input("账单备注", key="m_note")
             
             if st.button("🚀 确认收账入库", type="primary", use_container_width=True):
@@ -257,13 +268,13 @@ with tabs[2]:
                     for m, amt in member_deductions.items():
                         st.session_state['member_db'].loc[st.session_state['member_db']['会员姓名']==m, '当前余额($)'] -= amt
                         m_tip = amt * (final_tip_amount / total_collected) if total_collected > 0 else 0
-                        m_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[h_dm],'支付方式':['会员余额'],'入账总额($)':[amt],'其中小费($)':[m_tip],'备注':[f"会员 [{m}] 扣款 | {note}"]})
+                        m_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[session_dm],'支付方式':['会员余额'],'入账总额($)':[amt],'其中小费($)':[m_tip],'备注':[f"会员 [{m}] 扣款 | {note}"]})
                         st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], m_log], ignore_index=True)
 
                     def save_ext(method, amt, r=None):
                         method_tip = amt * (final_tip_amount / total_collected) if total_collected > 0 else 0
                         f_note = f"{note} [{method}收 ¥{r:.2f}]".strip() if r else note
-                        ext_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[h_dm],'支付方式':[method],'入账总额($)':[amt],'其中小费($)':[method_tip],'备注':[f_note]})
+                        ext_log = pd.DataFrame({'交易时间':[datetime.now().strftime("%Y-%m-%d %H:%M")],'关联剧本':[sel_s],'主开DM':[session_dm],'支付方式':[method],'入账总额($)':[amt],'其中小费($)':[method_tip],'备注':[f_note]})
                         st.session_state['ledger_db'] = pd.concat([st.session_state['ledger_db'], ext_log], ignore_index=True)
                         
                     if v_usd > 0: save_ext("Venmo", v_usd)
@@ -294,7 +305,7 @@ with tabs[2]:
             st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=550, key="ed_l")
 
 # ==========================================
-# Tab 4: 经营报表
+# Tab 4: 经营报表 (重构指标名称：总营业额作为100%基准)
 # ==========================================
 with tabs[3]:
     st.header("📊 财务损益动态分析")
@@ -329,6 +340,7 @@ with tabs[3]:
         mask_l = (l_df['交易时间_dt'] >= start_date) & (l_df['交易时间_dt'] <= end_date)
         filtered_l = l_df[mask_l]
         
+        # 总营业额 = 实际真金白银进账 (散客剧本收入 + 会员充值收入)，剔除余额抵扣
         cash_rev = filtered_l[filtered_l['支付方式'] != '会员余额']['入账总额($)'].sum()
         service_rev = filtered_l[filtered_l['关联剧本'] != '会员充值']['入账总额($)'].sum()
         
@@ -353,10 +365,11 @@ with tabs[3]:
     st.info("💡 财务引擎已启动【防重复计算】：会员充值款将直接计入现金流，后续会员打本扣除余额的交易将被视为内部抵扣，不重复计算现金营收，确保报表与实际账户入账 100% 匹配。")
     
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("区间实际现金流入", f"${cash_rev:,.2f}", "包含充值 / 剔除余额抵扣", delta_color="off")
-    m2.metric("员工时薪支出", f"${wages:,.2f}", f"占现金流: {wages_pct:.1f}%", delta_color="inverse")
-    m3.metric("DM专属小费支出", f"${tips:,.2f}", f"占现金流: {tips_pct:.1f}%", delta_color="inverse")
-    m4.metric("固定房租成本", f"${rent:,.2f}", f"占现金流: {rent_pct:.1f}%", delta_color="inverse")
+    # 将“区间实际现金流入”改名为“区间总营业额”
+    m1.metric("区间总营业额", f"${cash_rev:,.2f}", "100% (计算基准)", delta_color="off")
+    m2.metric("员工时薪支出", f"${wages:,.2f}", f"占营业额: {wages_pct:.1f}%", delta_color="inverse")
+    m3.metric("DM专属小费支出", f"${tips:,.2f}", f"占营业额: {tips_pct:.1f}%", delta_color="inverse")
+    m4.metric("固定房租成本", f"${rent:,.2f}", f"占营业额: {rent_pct:.1f}%", delta_color="inverse")
     m5.metric("区间净利润", f"${profit:,.2f}", f"净利润率: {profit_pct:.1f}%")
 
     st.caption(f"*(补充参考：此区间内门店纯剧本打本产值为 **${service_rev:,.2f}**，不含充值，包含会员余额抵扣)*")
@@ -367,7 +380,7 @@ with tabs[3]:
     with c_sub1:
         st.caption("🧾 流水入账记录")
         if not l_df.empty and not filtered_l.empty:
-            st.dataframe(filtered_l[['交易时间', '关联剧本', '支付方式', '入账总额($)']], use_container_width=True)
+            st.dataframe(filtered_l[['交易时间', '关联剧本', '主开DM', '支付方式', '入账总额($)']], use_container_width=True)
         else:
             st.info("期间无入账记录。")
     with c_sub2:
@@ -378,7 +391,7 @@ with tabs[3]:
             st.info("期间无人工支出记录。")
 
 # ==========================================
-# Tab 5: 会员记录 (智能模糊搜索修复版)
+# Tab 5: 会员记录
 # ==========================================
 with tabs[4]:
     m_col1, m_col2 = st.columns([1, 2])
@@ -445,15 +458,12 @@ with tabs[4]:
         
         st.divider()
         st.subheader("📖 会员历史消费明细")
-        # 核心修复区：利用精准提取的名字列表，进行正则安全搜索
         if search_m and not m_display.empty and not st.session_state['ledger_db'].empty:
             matched_names = m_display['会员姓名'].tolist()
-            # 无论他是开卡、续费还是打本，只要备注里带了他的名字，全部提取出来
             safe_pattern = "|".join([re.escape(name) for name in matched_names])
             m_logs = st.session_state['ledger_db'][st.session_state['ledger_db']['备注'].str.contains(safe_pattern, regex=True, na=False)]
             
             st.write("正在查看匹配会员的流水记录：")
-            # 自动按时间倒序排列，最新交易在最上面
             st.dataframe(m_logs[['交易时间', '关联剧本', '支付方式', '入账总额($)', '备注']].sort_values('交易时间', ascending=False), use_container_width=True)
         elif search_m and m_display.empty:
             st.warning("未找到匹配的会员。")

@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import time
+import re  # 核心修复：用于安全处理搜索匹配
 
 st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 
@@ -24,7 +25,6 @@ else:
 if 'ledger_db' not in st.session_state:
     st.session_state['ledger_db'] = pd.DataFrame(columns=['交易时间', '关联剧本', '主开DM', '支付方式', '入账总额($)', '其中小费($)', '备注'])
     
-# 【会员数据库升级：新增电话号码并向下兼容】
 if 'member_db' not in st.session_state:
     st.session_state['member_db'] = pd.DataFrame(columns=['会员姓名', '电话号码', '当前余额($)', '折扣率', '累计充值($)', '入会日期'])
 else:
@@ -378,7 +378,7 @@ with tabs[3]:
             st.info("期间无人工支出记录。")
 
 # ==========================================
-# Tab 5: 会员记录 (升级：添加电话号码)
+# Tab 5: 会员记录 (智能模糊搜索修复版)
 # ==========================================
 with tabs[4]:
     m_col1, m_col2 = st.columns([1, 2])
@@ -435,7 +435,6 @@ with tabs[4]:
         search_m = st.text_input("🔍 搜索会员 (支持姓名或电话搜索)", "")
         m_display = st.session_state['member_db'].copy()
         
-        # 支持按名字或电话进行模糊搜索
         if search_m:
             mask = m_display['会员姓名'].str.contains(search_m, case=False, na=False) | m_display['电话号码'].str.contains(search_m, case=False, na=False)
             m_display = m_display[mask]
@@ -446,7 +445,15 @@ with tabs[4]:
         
         st.divider()
         st.subheader("📖 会员历史消费明细")
-        if search_m and not st.session_state['ledger_db'].empty:
-            m_logs = st.session_state['ledger_db'][st.session_state['ledger_db']['备注'].str.contains(f"会员 \[[{search_m}]\]", regex=True, na=False) | st.session_state['ledger_db']['备注'].str.contains(f"{search_m}", na=False)]
-            st.write(f"正在查看匹配会员的流水记录：")
-            st.dataframe(m_logs[['交易时间', '关联剧本', '支付方式', '入账总额($)', '备注']], use_container_width=True)
+        # 核心修复区：利用精准提取的名字列表，进行正则安全搜索
+        if search_m and not m_display.empty and not st.session_state['ledger_db'].empty:
+            matched_names = m_display['会员姓名'].tolist()
+            # 无论他是开卡、续费还是打本，只要备注里带了他的名字，全部提取出来
+            safe_pattern = "|".join([re.escape(name) for name in matched_names])
+            m_logs = st.session_state['ledger_db'][st.session_state['ledger_db']['备注'].str.contains(safe_pattern, regex=True, na=False)]
+            
+            st.write("正在查看匹配会员的流水记录：")
+            # 自动按时间倒序排列，最新交易在最上面
+            st.dataframe(m_logs[['交易时间', '关联剧本', '支付方式', '入账总额($)', '备注']].sort_values('交易时间', ascending=False), use_container_width=True)
+        elif search_m and m_display.empty:
+            st.warning("未找到匹配的会员。")

@@ -5,13 +5,16 @@ import time
 
 st.set_page_config(page_title="Y Square Studio 管理系统", layout="wide")
 
-# --- 数据初始化 ---
+# --- 数据初始化与向下兼容 ---
 if 'scripts_db' not in st.session_state:
     st.session_state['scripts_db'] = pd.DataFrame(columns=['剧本名称', '人数配置', '单人价格($)', '主开DM', '日期'])
 if 'employee_db' not in st.session_state:
     st.session_state['employee_db'] = pd.DataFrame(columns=['员工姓名', '时薪($)'])
 if 'attendance_db' not in st.session_state:
     st.session_state['attendance_db'] = pd.DataFrame(columns=['记录日期', '员工姓名', '工作类型', '时长(小时)', '当日薪资($)'])
+else:
+    if '打卡日期' in st.session_state['attendance_db'].columns:
+        st.session_state['attendance_db'].rename(columns={'打卡日期': '记录日期'}, inplace=True)
 if 'ledger_db' not in st.session_state:
     st.session_state['ledger_db'] = pd.DataFrame(columns=['交易时间', '关联剧本', '支付方式', '入账总额($)', '其中小费($)', '备注'])
 
@@ -19,7 +22,7 @@ st.title("Y Square Studio 门店管理系统")
 tab1, tab2, tab3 = st.tabs(["📚 剧本列表管理", "⏰ 员工考勤与薪资", "💵 收银与流水记录"])
 
 # ==========================================
-# Tab 1: 剧本管理 (保持不变，省略展开代码)
+# Tab 1: 剧本管理
 # ==========================================
 with tab1:
     col1, col2 = st.columns([1, 2])
@@ -43,23 +46,17 @@ with tab1:
     with col2:
         st.subheader("当前剧本库")
         search_script = st.text_input("🔍 搜索剧本名称或主开 DM", "", key="search_s")
-        display_scripts = st.session_state['scripts_db'].copy()
         if search_script:
+            display_scripts = st.session_state['scripts_db']
             mask = display_scripts['剧本名称'].str.contains(search_script, case=False, na=False) | display_scripts['主开DM'].str.contains(search_script, case=False, na=False)
             st.dataframe(display_scripts[mask], use_container_width=True)
+            st.info("💡 清空搜索框即可进入修改/删除模式。")
         else:
+            st.caption("✨ **直接编辑模式**：双击单元格修改，勾选最左侧方框可删除整行。")
             st.session_state['scripts_db'] = st.data_editor(st.session_state['scripts_db'], num_rows="dynamic", use_container_width=True, key="edit_scripts")
-        
-        with st.expander("🗑️ 快速删除剧本"):
-            if not display_scripts.empty:
-                del_options = display_scripts.apply(lambda row: f"{row['日期']} | {row['剧本名称']}", axis=1)
-                if st.button("🚨 确认删除选中项", key="del_s"):
-                    del_idx = st.selectbox("选择", display_scripts.index, format_func=lambda x: del_options[x], label_visibility="collapsed")
-                    st.session_state['scripts_db'] = st.session_state['scripts_db'].drop(del_idx).reset_index(drop=True)
-                    st.rerun()
 
 # ==========================================
-# Tab 2: 考勤与月度结算 (保持紧凑版)
+# Tab 2: 考勤与月度结算
 # ==========================================
 with tab2:
     col_left, col_right = st.columns([1, 2])
@@ -70,7 +67,12 @@ with tab2:
             hourly_rate = st.number_input("基础时薪 ($)", min_value=0.0, step=0.5, value=15.0)
             if st.form_submit_button("新员工入职") and emp_name not in st.session_state['employee_db']['员工姓名'].values:
                 st.session_state['employee_db'] = pd.concat([st.session_state['employee_db'], pd.DataFrame({'员工姓名': [emp_name], '时薪($)': [hourly_rate]})], ignore_index=True)
+                st.toast(f"已录入 {emp_name}", icon="✅")
+                time.sleep(0.5)
                 st.rerun()
+        
+        with st.expander("⚙️ 修改或删除员工 (点此展开)"):
+            st.session_state['employee_db'] = st.data_editor(st.session_state['employee_db'], num_rows="dynamic", use_container_width=True, key="edit_emp")
         
         st.divider()
         st.subheader("2. 快速录入考勤")
@@ -84,6 +86,8 @@ with tab2:
                 if st.button("提交带本记录"):
                     rate = st.session_state['employee_db'][st.session_state['employee_db']['员工姓名'] == selected_emp]['时薪($)'].values[0]
                     st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame({'记录日期': [pd.to_datetime(work_date)], '员工姓名': [selected_emp], '工作类型': ["带本"], '时长(小时)': [hours], '当日薪资($)': [hours * rate]})], ignore_index=True)
+                    st.toast("记录成功", icon="✅")
+                    time.sleep(0.5)
                     st.rerun()
             else:
                 selected_emps = st.multiselect("选择参与演绎的 DM", employee_list)
@@ -91,6 +95,8 @@ with tab2:
                 if st.button("批量提交演绎记录") and selected_emps:
                     batch_data = [{'记录日期': pd.to_datetime(work_date), '员工姓名': emp, '工作类型': "演绎NPC", '时长(小时)': 0.0, '当日薪资($)': act_fee} for emp in selected_emps]
                     st.session_state['attendance_db'] = pd.concat([st.session_state['attendance_db'], pd.DataFrame(batch_data)], ignore_index=True)
+                    st.toast("记录成功", icon="✅")
+                    time.sleep(0.5)
                     st.rerun()
 
     with col_right:
@@ -101,19 +107,31 @@ with tab2:
             target_month = st.selectbox("选择月份", sorted(df['记录日期'].dt.strftime('%Y-%m').unique().tolist(), reverse=True))
             month_df = df[df['记录日期'].dt.strftime('%Y-%m') == target_month]
             
+            st.caption("✨ 双击下方表格即可修改考勤记录，修改会自动保存。")
             edited_month_df = st.data_editor(month_df, use_container_width=True, key="edit_att")
             if not edited_month_df.equals(month_df):
-                 for col in edited_month_df.columns: st.session_state['attendance_db'].loc[edited_month_df.index, col] = edited_month_df[col]
+                 for col in edited_month_df.columns: 
+                     st.session_state['attendance_db'].loc[edited_month_df.index, col] = edited_month_df[col]
+                 st.toast("考勤修改已保存！", icon="💾")
             
+            with st.expander("🗑️ 录错了想删除？点此选择并删除记录"):
+                if not month_df.empty:
+                    att_del_options = month_df.apply(lambda row: f"{row['记录日期'].strftime('%m-%d')} | {row['员工姓名']} | {row['工作类型']} | ${row['当日薪资($)']}", axis=1)
+                    att_del_idx = st.selectbox("选择", month_df.index, format_func=lambda x: att_del_options[x], label_visibility="collapsed")
+                    if st.button("🚨 确认删除这笔薪资记录"):
+                        st.session_state['attendance_db'] = st.session_state['attendance_db'].drop(att_del_idx).reset_index(drop=True)
+                        st.toast("已删除", icon="🗑️")
+                        time.sleep(0.5)
+                        st.rerun()
+
             if not month_df.empty:
-                summary = month_df.groupby('员工姓名').agg(总工时=('时长(小时)', 'sum'), 本月薪资=('当日薪资($)', 'sum')).reset_index()
+                summary = month_df.groupby('员工姓名').agg(总工时=('时长(小时)', 'sum'), 本月应付=('当日薪资($)', 'sum')).reset_index()
                 st.dataframe(summary, use_container_width=True)
 
 # ==========================================
-# Tab 3: 收银记账 (✨ 核心排版优化版 ✨)
+# Tab 3: 收银记账
 # ==========================================
 with tab3:
-    # 🌟 优化1：把总账单永远固定在最上面，再也不会看不到了！
     st.subheader("📈 门店营收大盘 (全折算为 USD)")
     display_ledger = st.session_state['ledger_db']
     
@@ -123,15 +141,14 @@ with tab3:
         pure_revenue = total_revenue - total_tips
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("💰 门店总入账", f"${total_revenue:,.2f}")
-        m2.metric("📊 剥离小费后净收", f"${pure_revenue:,.2f}")
-        m3.metric("✨ 累计沉淀小费", f"${total_tips:,.2f}")
+        m1.metric("💰 门店总流水", f"${total_revenue:,.2f}")
+        m2.metric("📊 净收(减去小费)", f"${pure_revenue:,.2f}")
+        m3.metric("✨ 待发小费池", f"${total_tips:,.2f}")
     else:
         st.info("今日暂无进账记录。")
     
     st.divider()
 
-    # 🌟 优化2：左右分栏，右边留宽一点
     col_pay1, col_pay2 = st.columns([1, 1.4])
     
     with col_pay1:
@@ -155,7 +172,7 @@ with tab3:
         cash_amt = c2.number_input("💵 现金", min_value=0.0, step=1.0)
         
         c3, c4 = st.columns(2)
-        exchange_rate = c3.number_input("汇率 (USD=RMB)", value=7.20, step=0.05)
+        exchange_rate = c3.number_input("当前汇率 (USD=RMB)", value=7.20, step=0.05)
         alipay_rmb = c3.number_input("💙 支付宝(¥)", min_value=0.0, step=10.0)
         wechat_rmb = c4.number_input("💚 微信(¥)", min_value=0.0, step=10.0)
         
@@ -172,12 +189,12 @@ with tab3:
             tip_amount = 0.0
             st.caption(f"当前实收 **${total_collected:.2f}**")
             
-        if st.checkbox("手动覆写小费"):
+        if st.checkbox("手动覆写小费金额"):
             tip_amount = st.number_input("输入小费", value=float(tip_amount))
             
         dm_list = st.session_state['employee_db']['员工姓名'].tolist()
-        tipped_dms = st.multiselect("🧑‍🏫 平分小费给DM", dm_list)
-        pay_note = st.text_input("备注")
+        tipped_dms = st.multiselect("🧑‍🏫 选择DM平分小费", dm_list)
+        pay_note = st.text_input("账单备注")
         
         if st.button("🚀 确认收账入库", type="primary", use_container_width=True):
             if total_collected > 0:
@@ -207,14 +224,12 @@ with tab3:
 
     with col_pay2:
         st.subheader("流水明细与修改")
-        if not display_ledger.empty:
-            search_ledger = st.text_input("🔍 搜索剧本名称查账", "", key="search_l")
-            if search_ledger:
-                display_ledger = display_ledger[display_ledger['关联剧本'].str.contains(search_ledger, case=False, na=False)]
-            
-            edited_ledger = st.data_editor(display_ledger, use_container_width=True, height=450, key="edit_ledger")
-            if not edited_ledger.equals(display_ledger):
-                 for col in edited_ledger.columns: st.session_state['ledger_db'].loc[edited_ledger.index, col] = edited_ledger[col]
-                 st.toast("修改已保存！", icon="💾")
-                 time.sleep(0.5)
-                 st.rerun()
+        search_ledger = st.text_input("🔍 搜索查账 (清空搜索框以进入编辑模式)", "", key="search_l")
+        
+        if search_ledger:
+            mask = st.session_state['ledger_db']['关联剧本'].str.contains(search_ledger, case=False, na=False) | st.session_state['ledger_db']['备注'].str.contains(search_ledger, case=False, na=False)
+            st.dataframe(st.session_state['ledger_db'][mask], use_container_width=True, height=450)
+            st.info("💡 提示：搜索状态下不可修改。清空上方的搜索框，即可直接修改或删除流水。")
+        else:
+            st.caption("✨ **直接编辑模式**：双击单元格即可修改金额。勾选最左侧方框后按 Delete 可删除流水。")
+            st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=450, key="edit_ledger")

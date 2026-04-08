@@ -254,16 +254,24 @@ with tab3:
             st.session_state['ledger_db'] = st.data_editor(st.session_state['ledger_db'], num_rows="dynamic", use_container_width=True, height=450, key="edit_ledger")
 
 # ==========================================
-# Tab 4: 经营营收报表
+# Tab 4: 经营营收报表 (核心升级：可调房租 & 利润率分析)
 # ==========================================
 with tab4:
     st.header("📈 门店经营损益分析")
-    st.caption("数据基于流水记录与员工薪资自动汇总")
+    st.caption("基于 Tab 2(考勤) 与 Tab 3(流水) 数据自动生成")
+
+    # 1. 可自定义的固定房租成本
+    col_rent1, col_rent2 = st.columns([1, 3])
+    with col_rent1:
+        current_rent = st.number_input("🏠 本月设定房租 ($)", min_value=0.0, step=100.0, value=7000.0)
+
+    st.divider()
 
     df_ledger = st.session_state['ledger_db'].copy()
     df_attendance = st.session_state['attendance_db'].copy()
     
     if not df_ledger.empty or not df_attendance.empty:
+        # 时间格式处理
         if not df_ledger.empty:
             df_ledger['交易时间'] = pd.to_datetime(df_ledger['交易时间'])
             df_ledger['月份'] = df_ledger['交易时间'].dt.strftime('%Y-%m')
@@ -272,57 +280,79 @@ with tab4:
             df_attendance['记录日期'] = pd.to_datetime(df_attendance['记录日期'])
             df_attendance['月份'] = df_attendance['记录日期'].dt.strftime('%Y-%m')
 
+        # 汇总收入
         revenue_monthly = pd.DataFrame()
         if not df_ledger.empty:
             revenue_monthly = df_ledger.groupby('月份')['入账总额($)'].sum().reset_index()
             revenue_monthly.columns = ['月份', '剧本总营收($)']
 
+        # 汇总支出
         expense_monthly = pd.DataFrame()
         if not df_attendance.empty:
             tips_cost = df_attendance[df_attendance['工作类型'] == "专属小费"].groupby('月份')['当日薪资($)'].sum().reset_index()
-            tips_cost.columns = ['月份', '小费支出($)']
+            tips_cost.columns = ['月份', '小费总额($)']
             
             wages_cost = df_attendance[df_attendance['工作类型'] != "专属小费"].groupby('月份')['当日薪资($)'].sum().reset_index()
             wages_cost.columns = ['月份', '员工工资($)']
             
             expense_monthly = pd.merge(wages_cost, tips_cost, on='月份', how='outer').fillna(0)
 
+        # 合并所有财务数据
         if not revenue_monthly.empty or not expense_monthly.empty:
             report_df = pd.merge(revenue_monthly, expense_monthly, on='月份', how='outer').fillna(0)
             
-            if '剧本总营收($)' not in report_df.columns: report_df['剧本总营收($)'] = 0.0
-            if '员工工资($)' not in report_df.columns: report_df['员工工资($)'] = 0.0
-            if '小费支出($)' not in report_df.columns: report_df['小费支出($)'] = 0.0
+            # 补齐缺少的列
+            for col in ['剧本总营收($)', '员工工资($)', '小费总额($)']:
+                if col not in report_df.columns:
+                    report_df[col] = 0.0
             
-            report_df['房租支出($)'] = 7000.0
-            report_df['总支出($)'] = report_df['员工工资($)'] + report_df['小费支出($)'] + report_df['房租支出($)']
-            report_df['净利润($)'] = report_df['剧本总营收($)'] - report_df['总支出($)']
+            # 引入动态房租并计算最终利润
+            report_df['房租支出($)'] = current_rent
+            report_df['净利润($)'] = report_df['剧本总营收($)'] - report_df['员工工资($)'] - report_df['小费总额($)'] - report_df['房租支出($)']
 
+            # 提取最新月份的数据进行核心指标展示
             latest_month = report_df.sort_values('月份', ascending=False).iloc[0]
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric(f"{latest_month['月份']} 总营收", f"${latest_month['剧本总营收($)']:,.2f}")
-            m2.metric(f"{latest_month['月份']} 人工成本", f"${(latest_month['员工工资($)'] + latest_month['小费支出($)']):,.2f}")
             
-            profit_val = latest_month['净利润($)']
-            m3.metric(f"{latest_month['月份']} 净利润", f"${profit_val:,.2f}", delta=f"{profit_val:,.2f}", delta_color="normal")
-            m4.metric("固定房租", "$7,000.00")
+            rev = latest_month['剧本总营收($)']
+            wages = latest_month['员工工资($)']
+            tips = latest_month['小费总额($)']
+            rent = latest_month['房租支出($)']
+            profit = latest_month['净利润($)']
+
+            # 计算各项占比 (如果当月营收为 0，则占比为 0 防止报错)
+            if rev > 0:
+                wages_pct = (wages / rev) * 100
+                tips_pct = (tips / rev) * 100
+                rent_pct = (rent / rev) * 100
+                profit_pct = (profit / rev) * 100
+            else:
+                wages_pct = tips_pct = rent_pct = profit_pct = 0.0
+
+            st.subheader(f"📊 {latest_month['月份']} 核心财务指标与占比")
+            
+            m1, m2, m3, m4, m5 = st.columns(5)
+            
+            m1.metric("总流水营收", f"${rev:,.2f}", "100% (计算基准)")
+            # 员工工资
+            m2.metric("员工时薪支出", f"${wages:,.2f}", f"占营收: {wages_pct:.1f}%", delta_color="inverse")
+            # 小费 (100% 给 DM，计为成本)
+            m3.metric("DM专属小费支出", f"${tips:,.2f}", f"占营收: {tips_pct:.1f}%", delta_color="inverse")
+            # 房租
+            m4.metric("房租固定支出", f"${rent:,.2f}", f"占营收: {rent_pct:.1f}%", delta_color="inverse")
+            # 净利润
+            m5.metric("最终净利润", f"${profit:,.2f}", f"净利润率: {profit_pct:.1f}%")
 
             st.divider()
-            st.subheader("🗓️ 历史月度损益明细")
+            st.subheader("🗓️ 历史月度财务明细表")
             
             styled_report = report_df.sort_values('月份', ascending=False).style.format({
                 '剧本总营收($)': '{:,.2f}',
                 '员工工资($)': '{:,.2f}',
-                '小费支出($)': '{:,.2f}',
+                '小费总额($)': '{:,.2f}',
                 '房租支出($)': '{:,.2f}',
-                '总支出($)': '{:,.2f}',
                 '净利润($)': '{:,.2f}'
             })
-            st.table(styled_report)
-
-            st.subheader("📈 营收与利润趋势")
-            chart_data = report_df.set_index('月份')[['剧本总营收($)', '总支出($)', '净利润($)']]
-            st.line_chart(chart_data)
+            st.dataframe(styled_report, use_container_width=True)
 
         else:
             st.info("数据不足，无法生成报表。")
